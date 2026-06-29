@@ -4,7 +4,7 @@
   publish = ".next"
 
 [build.environment]
-  NEXT_PUBLIC_API_URL = "https://compiled-half-trends-diary.trycloudflare.com/api"
+  NEXT_PUBLIC_API_URL = "https://button-joins-face-tapes.trycloudflare.com/api"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
