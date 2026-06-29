@@ -1,0 +1,24 @@
+Django>=6.0
+djangorestframework>=3.17
+djangorestframework-simplejwt>=5.5
+django-cors-headers>=4.9
+whitenoise>=6.12
+# Data science & signal processing
+numpy>=2.0
+pandas>=3.0
+scipy>=1.18
+matplotlib>=3.11
+plotly>=6.8
+bokeh>=3.9
+# Google APIs
+gspread>=6.2
+oauth2client>=4.1
+google-auth>=2.55
+google-auth-oauthlib>=1.4
+google-api-python-client>=2.197
+# PDF generation
+reportlab>=5.0
+# Utilities
+chardet>=7.0
+Pillow>=12.0
+requests>=2.34

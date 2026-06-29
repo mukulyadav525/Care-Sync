@@ -1,0 +1,234 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+:root {
+  /* ---------------- CareVibe Theme – Light ---------------- */
+  --bg-color: #f0fdf4; /* Very light mint background */
+  --surface-color: #ffffff;
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --primary-color: #10b981; /* Emerald green */
+  --primary-hover: #059669;
+  --border-color: #e2e8f0;
+  --input-bg: #ffffff;
+
+  --panel-bg-light: #e6fcf5; /* Lighter mint for the left panel */
+  --panel-border: #d1fae5;
+
+  --info-bg: #f8fafc;
+  --info-border: #e2e8f0;
+
+  --btn-toggle-bg: #f1f5f9;
+  --btn-toggle-active: #10b981;
+  --btn-toggle-text: #64748b;
+  --btn-toggle-text-active: #ffffff;
+
+  /* Aliases / accents used across dashboard, files & visualization
+     (kept in the same emerald family so the theme stays consistent) */
+  --primary: var(--primary-color);
+  --secondary: #0d9488; /* Teal accent */
+  --success: #16a34a;
+  --error: #ef4444;
+  --surface: var(--surface-color);
+  --border: var(--border-color);
+  --text-muted: var(--text-secondary);
+  --glass-bg: rgba(230, 252, 245, 0.6);
+
+  --spacing-base: 1rem;
+  --radius-lg: 24px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 1px 3px rgba(15, 23, 42, 0.06), 0 10px 30px -16px rgba(16, 185, 129, 0.25);
+
+  --transition-fast: 0.2s ease;
+}
+
+/* ---------------- Dark mode overrides ---------------- */
+[data-theme="dark"] {
+  --bg-color: #0d1117;
+  --surface-color: #161b22;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --border-color: #30363d;
+  --input-bg: #0d1117;
+  --panel-bg-light: #1a2332;
+  --panel-border: #2d4a3e;
+  --info-bg: #161b22;
+  --info-border: #30363d;
+  --btn-toggle-bg: #21262d;
+  --btn-toggle-text: #8b949e;
+  --glass-bg: rgba(22, 27, 34, 0.8);
+  --shadow-md: 0 1px 3px rgba(0,0,0,0.3), 0 10px 30px -16px rgba(16,185,129,0.15);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  line-height: 1.5;
+  min-height: 100vh;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+a {
+  color: var(--primary-color);
+  text-decoration: none;
+}
+
+/* ---------------- Buttons ---------------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 1rem;
+  border: none;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all var(--transition-fast);
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background-color: var(--primary-color);
+  color: white;
+}
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--primary-hover);
+}
+
+.btn-dark {
+  background-color: #0f172a;
+  color: white;
+}
+.btn-dark:hover:not(:disabled) {
+  background-color: #1e293b;
+}
+
+.btn-outline {
+  background-color: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+.btn-outline:hover:not(:disabled) {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+  background-color: var(--panel-bg-light);
+}
+
+/* ---------------- Forms ---------------- */
+.input-group {
+  margin-bottom: 1.25rem;
+}
+
+.input-label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: var(--text-primary);
+}
+
+.input-field {
+  width: 100%;
+  padding: 0.875rem 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 1rem;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.input-field:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12);
+}
+
+/* ---------------- Layout ---------------- */
+.app-container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-content {
+  flex: 1;
+}
+
+.container {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2.5rem 2rem;
+}
+
+/* ---------------- Cards / Panels ---------------- */
+.glass-panel {
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  transition: box-shadow var(--transition-fast), transform var(--transition-fast);
+}
+
+.glass-panel:hover {
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08), 0 16px 40px -18px rgba(16, 185, 129, 0.32);
+}
+
+/* ---------------- Animations ---------------- */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.4s ease both;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ---------------- Custom Scrollbar ---------------- */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-color);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}

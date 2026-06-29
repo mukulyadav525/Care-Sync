@@ -1,0 +1,37 @@
+# ---------------- OS ----------------
+.DS_Store
+
+# ---------------- Python / Django ----------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+backend/media/
+backend/staticfiles/
+backend/Users/
+
+# Secrets
+backend/credentials.json
+.env
+.env.*
+!.env.example
+
+# ---------------- Node / Next.js ----------------
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+*.tsbuildinfo
+next-env.d.ts
+
+# ---------------- Database ----------------
+# The SQLite dev DB is tracked intentionally; ignore journal/wal side files.
+database/*.sqlite3-journal
+database/*.sqlite3-wal
+database/*.sqlite3-shm
+
+# ---------------- Logs ----------------
+*.log
+npm-debug.log*
