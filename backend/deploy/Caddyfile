@@ -1,0 +1,5 @@
+# Replace api.yourdomain.com with your actual domain.
+# Point an A record at 103.25.231.107 before running Caddy.
+api.yourdomain.com {
+    reverse_proxy 127.0.0.1:8000
+}

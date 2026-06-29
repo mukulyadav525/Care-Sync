@@ -1,0 +1,21 @@
+# Cloudflare Tunnel config — use this if you don't have a domain name yet.
+# It gives you a free *.trycloudflare.com subdomain with automatic HTTPS.
+#
+# Setup (one-time):
+#   curl -L https://pkg.cloudflare.com/cloudflare-main.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-main.gpg
+#   echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared jammy main" | sudo tee /etc/apt/sources.list.d/cloudflared.list
+#   sudo apt update && sudo apt install cloudflared
+#   cloudflared tunnel login          # opens browser, authorise
+#   cloudflared tunnel create caresync
+#   # copy the tunnel UUID shown into tunnel: below
+#   cloudflared tunnel route dns caresync api.yourdomain.com  # if you own a domain managed in Cloudflare
+#   # OR for a quick throwaway URL (no domain needed):
+#   cloudflared tunnel --url http://localhost:8000              # prints a *.trycloudflare.com URL
+
+tunnel: <YOUR-TUNNEL-UUID>
+credentials-file: /home/ubuntu/.cloudflared/<YOUR-TUNNEL-UUID>.json
+
+ingress:
+  - hostname: api.yourdomain.com
+    service: http://localhost:8000
+  - service: http_status:404

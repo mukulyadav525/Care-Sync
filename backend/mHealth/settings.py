@@ -160,6 +160,8 @@ CORS_ALLOWED_ORIGINS = [
     'http://127.0.0.1:3000',
     'http://localhost:3001',
     'http://127.0.0.1:3001',
+    'https://caresync11.netlify.app',
+    *[o for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',') if o.strip()],
 ]
 CORS_ALLOW_CREDENTIALS = True
 

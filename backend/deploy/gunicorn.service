@@ -1,0 +1,17 @@
+[Unit]
+Description=Care-Sync Django/Gunicorn
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/krish22253/backend
+EnvironmentFile=/home/ubuntu/krish22253/backend/.env
+ExecStart=/home/ubuntu/krish22253/backend/.venv/bin/gunicorn \
+    --workers 3 \
+    --bind 127.0.0.1:8000 \
+    --timeout 120 \
+    mHealth.wsgi:application
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
