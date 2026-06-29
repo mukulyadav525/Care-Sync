@@ -4,7 +4,7 @@
   publish = ".next"
 
 [build.environment]
-  NEXT_PUBLIC_API_URL = "http://103.25.231.107:8000/api"
+  NEXT_PUBLIC_API_URL = "https://partner-arrivals-menu-readings.trycloudflare.com/api"  # replace with your cloudflared tunnel URL
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
