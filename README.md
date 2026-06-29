@@ -35,10 +35,10 @@ templates). Endpoints are grouped under `/api/` in `mHealth/urls.py` (Care-Sync)
 
 ```bash
 cd backend
-python -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python manage.py migrate
-python manage.py runserver   # http://127.0.0.1:8000
+python3 manage.py migrate
+python3 manage.py runserver   # http://127.0.0.1:8000
 ```
 
 ### Signal Portal (`/portal`)
