@@ -18,4 +18,10 @@ credentials-file: /home/ubuntu/.cloudflared/<YOUR-TUNNEL-UUID>.json
 ingress:
   - hostname: api.yourdomain.com
     service: http://localhost:8000
+  # Care-Sync AI service (chat, trends, HRV forecast/anomaly/digital-twin).
+  # Point NEXT_PUBLIC_AI_API_URL (Netlify env var) at this hostname, or run
+  # a second `cloudflared tunnel --url http://localhost:8001` for a quick
+  # throwaway *.trycloudflare.com URL instead.
+  - hostname: ai.yourdomain.com
+    service: http://localhost:8001
   - service: http_status:404

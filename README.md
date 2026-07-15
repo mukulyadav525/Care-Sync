@@ -8,6 +8,7 @@ separated layers plus a small device-side ingestion service.
 .
 ├── frontend/           # Next.js 16 + React 19 web app (UI)
 ├── backend/            # Django 6 + DRF REST API (business logic, auth, HL7)
+├── ai/                 # FastAPI agentic pipeline (signal analysis, chatbot, trends)
 ├── database/           # SQLite database file (db.sqlite3)
 └── device-ingestion/   # Standalone Flask scripts that receive raw sensor data
 ```
@@ -70,6 +71,32 @@ cd backend
 .venv/bin/python scripts/generate_sample_e4.py <username> <session_name> <hours>
 # e.g. python scripts/generate_sample_e4.py mukul session_demo 3
 ```
+
+### `ai/` — Agentic health analysis pipeline
+Standalone FastAPI service (independent of Django) that runs a small
+[LangGraph](https://github.com/langchain-ai/langgraph) agent pipeline over PPG
+signals: preprocessing/denoising (Butterworth + Savitzky-Golay filtering),
+peak detection, HRV (RMSSD/SDNN), stress scoring, and an LLM (Grok, via
+[xAI](https://console.x.ai)) report step. It also exposes a context-aware
+chatbot endpoint and a `/trends` endpoint for weekly heart-rate/stress history.
+
+```bash
+cd ai
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # fill in XAI_API_KEY
+uvicorn ai.app:app --reload --port 8001   # run from the repo root, not from ai/
+```
+
+The dashboard's "AI Health Analysis" panel calls this service at
+`NEXT_PUBLIC_AI_API_URL` (defaults to `http://127.0.0.1:8001`); it degrades
+gracefully (panel just won't populate) if the service isn't running.
+
+Key endpoints:
+- `GET /graph-data` — sample PPG/HR/stress series for charting
+- `GET /trends` — weekly heart-rate & stress history, bucketed by day/hour
+- `POST /chat` — `{ "question": "..." }` → routes through planner → signal
+  analysis → report agents, returns an analysis + natural-language response
 
 ### `database/`
 Holds the SQLite database (`db.sqlite3`). The backend resolves this path

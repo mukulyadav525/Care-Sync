@@ -1,0 +1,70 @@
+# ============================================================================
+# Config for evaluating / running a TRAINED model on a NEW dataset.
+#
+# IMPORTANT: the feature-engineering blocks below (cleaning / features / model
+# horizons + predict_rmssd) MUST match the config the model was TRAINED with, or
+# the engineered feature columns won't line up with what the model expects.
+# The pooled model (models/multi/<m>) was trained with configs/config_multi.yaml,
+# so these blocks are copied from there. Only the `data` block is new.
+#
+# The model's input window length and exact feature list come from its own
+# meta.joblib at inference time — you do NOT need to match input_seq_len_s here.
+# ============================================================================
+
+data:
+  format: "e4_raw"          # Empatica-E4 CSV export (HR/IBI/ACC/BVP/EDA/TEMP[/tags])
+  # Path RELATIVE TO THE PARENT of the project dir (the "HRV" folder), e.g.
+  # "NEW_DATASET" so that <raw_root>/<SID>/HR.csv (flat) or
+  # <raw_root>/<SID>/<SID>_E4_Data/HR.csv (nested, WESAD-style) exists.
+  # An absolute path also works, or override on the CLI with --raw-root / --data.
+  raw_root: "NEW_DATASET"
+  subjects: null            # null = all S* folders found; or e.g. ["S2","S5"]
+
+resample:
+  freq: "1s"
+
+cleaning:
+  hr_min_bpm: 30
+  hr_max_bpm: 220
+  ibi_min_s: 0.3
+  ibi_max_s: 2.0
+  bvp_bandpass_hz: [0.5, 8.0]
+  eda_lowpass_hz: 1.0
+  max_interpolate_gap_s: 5
+  max_segment_gap_s: 60
+
+features:
+  hr_windows_s: [30, 60, 300]
+  hrv_windows_s: [60, 300]
+  acc_windows_s: [10, 60]
+  bvp_agg_window_s: 1
+  activity_thresholds_g: [0.05, 0.2, 0.5]
+  hrv_min_beats: 3
+  hrv_hampel_window: 5
+  hrv_hampel_sigma: 3.0
+  baseline_windows_s: [3600]
+  longctx_windows_s: [900, 1800, 3600]
+
+model:
+  # horizons_s MUST match the trained model's target horizons (60/300/600 = 1/5/10 min)
+  horizons_s: [60, 300, 600]
+  predict_rmssd: true       # match training: pooled/global models forecast RMSSD too
+  predict_deltas: false
+  predict_vitals: false
+  input_seq_len_s: 300      # informational only — inference uses meta.joblib's seq_len
+
+anomaly:
+  ewma_lambda: 0.02
+  z_thresh: 3.0
+  consecutive_required: 3
+  pi_multiplier: 1.96
+  w_hr: 1.0
+  w_rmssd: 0.7
+  baseline_weight: 4.0
+  cusum_weight: 0.5
+  start_percentile: 99.0
+  min_start_thresh: 3.0
+  stop_fraction: 0.6
+  min_duration_s: 20
+  cooldown_s: 60
+  sqi_downweight: true

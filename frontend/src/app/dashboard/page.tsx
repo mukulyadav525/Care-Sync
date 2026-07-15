@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Activity, FileText, Upload, ShieldCheck, Radio, Wifi, WifiOff, ChevronRight, Clock, Bluetooth, HeartPulse, Thermometer, Droplets } from 'lucide-react';
 import api from '@/lib/api';
+import HealthCharts from '@/components/HealthCharts';
+import WeeklyTrendChart from '@/components/trends/WeeklyTrendChart';
 
 const BLE_STORAGE_KEY = 'ble_latest';
 const BLE_STALE_MS = 10_000; // hide tile if no update in 10s
+const AI_API_URL = process.env.NEXT_PUBLIC_AI_API_URL || 'http://127.0.0.1:8001';
 
 interface BleLatest { t: number; HR?: number; EDA?: number; TEMP?: number; ACC?: number; }
 
@@ -26,6 +29,12 @@ export default function Dashboard() {
   const [sessions, setSessions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [bleData, setBleData] = useState<BleLatest | null>(null);
+  const [aiResult, setAiResult] = useState<any>(null);
+  const [loadingAI, setLoadingAI] = useState(false);
+  const [graphData, setGraphData] = useState<any[]>([]);
+  const [weeklyTrends, setWeeklyTrends] = useState<{ heart_rate: any[]; stress: any[] }>({ heart_rate: [], stress: [] });
+  // Stable per-page-load id so the AI chatbot keeps conversation context across clicks
+  const aiSessionId = useRef(crypto.randomUUID());
 
   useEffect(() => {
     const load = async () => {
@@ -62,6 +71,47 @@ export default function Dashboard() {
     const t = setInterval(check, 2000);
     return () => clearInterval(t);
   }, []);
+
+  // Fetch sample graph data from the AI pipeline service (best-effort; service is optional)
+  useEffect(() => {
+    fetch(`${AI_API_URL}/graph-data`)
+      .then((res) => res.json())
+      .then(setGraphData)
+      .catch(() => setGraphData([]));
+  }, []);
+
+  // Weekly heart-rate/stress trend, bucketed by day/hour (best-effort; service is optional)
+  useEffect(() => {
+    fetch(`${AI_API_URL}/trends`)
+      .then((res) => res.json())
+      .then((data) => setWeeklyTrends({ heart_rate: data.heart_rate ?? [], stress: data.stress ?? [] }))
+      .catch(() => setWeeklyTrends({ heart_rate: [], stress: [] }));
+  }, []);
+
+  const runAIAnalysis = async () => {
+    setLoadingAI(true);
+    try {
+      const res = await fetch(`${AI_API_URL}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: 'Analyze latest PPG signal', session_id: aiSessionId.current }),
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(text);
+      setAiResult(JSON.parse(text));
+    } catch (err) {
+      console.error('AI ERROR:', err);
+      alert(String(err));
+    } finally {
+      setLoadingAI(false);
+    }
+  };
+
+  const hr = aiResult?.analysis?.heart_rate;
+  const rmssd = aiResult?.analysis?.hrv?.rmssd;
+  const sdnn = aiResult?.analysis?.hrv?.sdnn;
+  const stressScore = aiResult?.analysis?.stress?.stress_score;
+  const stressLevel = aiResult?.analysis?.stress?.stress_level;
 
   if (loading) return <div className="container" style={{ padding: '4rem', textAlign: 'center' }}>Loading dashboard...</div>;
 
@@ -185,6 +235,64 @@ export default function Dashboard() {
                 </span>
               </Link>
             ))}
+          </div>
+        )}
+      </div>
+
+      {/* AI Health Analysis (agentic pipeline: denoise → filter → HRV → stress → report) */}
+      <div className="glass-panel" style={{ padding: '2rem' }}>
+        <h3 style={{ marginBottom: '1.5rem' }}>AI Health Analysis</h3>
+        <button className="btn btn-primary" onClick={runAIAnalysis} disabled={loadingAI}>
+          {loadingAI ? 'Analyzing...' : 'Analyze Latest PPG'}
+        </button>
+
+        {aiResult && (
+          <div style={{ marginTop: '2rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            <div style={{
+              padding: '1.5rem',
+              borderRadius: 'var(--radius-md)',
+              border: `1px solid ${stressLevel === 'Low' ? 'var(--success)' : stressLevel === 'Moderate' ? '#f59e0b' : 'var(--error)'}`,
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem',
+            }}>
+              <div>
+                <h4 style={{ marginBottom: '0.3rem' }}>{stressLevel ?? '—'} Stress Detected</h4>
+                <p style={{ color: 'var(--text-muted)' }}>Heart rate and HRV analysis completed successfully.</p>
+              </div>
+              <span style={{
+                background: stressLevel === 'Low' ? 'var(--success)' : stressLevel === 'Moderate' ? '#f59e0b' : 'var(--error)',
+                padding: '10px 18px', borderRadius: '999px', fontWeight: 700, color: 'white',
+              }}>
+                {stressLevel ?? '—'}
+              </span>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+              <div className="glass-panel" style={{ padding: '1.25rem' }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Heart Rate</span>
+                <h2>{hr?.toFixed(0) ?? '—'} BPM</h2>
+              </div>
+              <div className="glass-panel" style={{ padding: '1.25rem' }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Stress Score</span>
+                <h2>{stressScore ?? '—'}</h2>
+              </div>
+              <div className="glass-panel" style={{ padding: '1.25rem' }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>RMSSD</span>
+                <h2>{rmssd?.toFixed(1) ?? '—'} ms</h2>
+              </div>
+              <div className="glass-panel" style={{ padding: '1.25rem' }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>SDNN</span>
+                <h2>{sdnn?.toFixed(1) ?? '—'} ms</h2>
+              </div>
+            </div>
+
+            {aiResult?.response && (
+              <div className="glass-panel" style={{ padding: '1.5rem' }}>
+                <h4 style={{ marginBottom: '0.75rem' }}>AI Report</h4>
+                <p style={{ whiteSpace: 'pre-wrap', color: 'var(--text-muted)' }}>{aiResult.response}</p>
+              </div>
+            )}
+
+            {graphData.length > 0 && <HealthCharts data={graphData} />}
           </div>
         )}
       </div>

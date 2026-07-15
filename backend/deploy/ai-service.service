@@ -1,0 +1,19 @@
+[Unit]
+Description=Care-Sync AI (FastAPI: chat, trends, HRV forecast/anomaly/digital-twin)
+After=network.target
+
+[Service]
+User=ubuntu
+# NOTE: WorkingDirectory is the repo ROOT (not ai/), because ai/app.py is
+# imported as the "ai" package (`ai.app:app`) and reads relative paths like
+# ai/data/sample_ppg.csv. Same convention as running it locally.
+WorkingDirectory=/home/ubuntu/Care-Sync
+EnvironmentFile=/home/ubuntu/Care-Sync/ai/.env
+ExecStart=/home/ubuntu/Care-Sync/ai/.venv/bin/uvicorn ai.app:app \
+    --host 127.0.0.1 \
+    --port 8001 \
+    --workers 2
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

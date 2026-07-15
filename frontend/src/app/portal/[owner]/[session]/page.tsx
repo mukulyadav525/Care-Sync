@@ -11,6 +11,7 @@ import {
   FileText, AlertTriangle, Plus, Trash2, GitCompare,
 } from 'lucide-react';
 import api, { downloadFile } from '@/lib/api';
+import HRVInsights from '@/components/HRVInsights';
 
 type Granularity = 'minute' | 'hour' | 'day';
 
@@ -246,6 +247,9 @@ export default function SessionDashboard() {
           ))}
         </div>
       )}
+
+      {/* HRV forecast / anomaly / digital twin (ai/ service) */}
+      <HRVInsights signals={data.signals} />
 
       {/* Signal panels */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 480px), 1fr))', gap: '1.5rem' }}>

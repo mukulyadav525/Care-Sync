@@ -1,5 +1,11 @@
-# Replace api.yourdomain.com with your actual domain.
-# Point an A record at 103.25.231.107 before running Caddy.
+# Replace api.yourdomain.com / ai.yourdomain.com with your actual domain(s).
+# Point A records at 103.25.231.107 before running Caddy.
 api.yourdomain.com {
     reverse_proxy 127.0.0.1:8000
+}
+
+# Care-Sync AI service (chat, trends, HRV forecast/anomaly/digital-twin).
+# Point NEXT_PUBLIC_AI_API_URL (Netlify env var) at this host.
+ai.yourdomain.com {
+    reverse_proxy 127.0.0.1:8001
 }

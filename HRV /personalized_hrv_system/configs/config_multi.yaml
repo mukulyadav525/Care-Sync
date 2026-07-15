@@ -1,0 +1,77 @@
+# Pooled multi-dataset config: train ONE global HR/HRV forecaster on 70% of
+# subjects across Dataset3 (Stress-Predict) + WESAD, test on the held-out 30%.
+# Both are Empatica E4 datasets sharing the same six vitals:
+#   HR, IBI, ACC, BVP, EDA, TEMP
+# Subject-level holdout (whole people held out), stratified per dataset.
+#
+# Adjust each raw_root to your server paths (RELATIVE TO THE PARENT of this
+# project dir). Set a dataset's "subjects" to a list to use only some of them.
+
+datasets:
+  - name: stress_predict
+    format: e4_raw
+    raw_root: "Dataset3/Raw_data"
+    subjects: null
+  - name: wesad
+    format: e4_raw
+    raw_root: "WESAD"
+    subjects: null
+
+split:
+  train_fraction: 0.6      # subject-level 3-way split (per dataset, stratified)
+  val_fraction: 0.15       #   train ~60% | val ~15% | test ~25%
+  seed: 42                 # change to reshuffle; recorded in models/multi/<m>/split.json
+
+multi:
+  stride_s: 30             # window stride when pooling (bigger = fewer windows, less RAM)
+  max_windows_per_subject: 4000   # cap per subject; subsampled uniformly
+  dataset_id_feature: true        # Tier-2 #15: add dataset id as a domain-adaptation feature
+
+resample:
+  freq: "1s"
+
+cleaning:
+  hr_min_bpm: 30
+  hr_max_bpm: 220
+  ibi_min_s: 0.3
+  ibi_max_s: 2.0
+  bvp_bandpass_hz: [0.5, 8.0]
+  eda_lowpass_hz: 1.0
+  max_interpolate_gap_s: 5
+  max_segment_gap_s: 60
+
+features:
+  hr_windows_s: [30, 60, 300]
+  hrv_windows_s: [60, 300]
+  acc_windows_s: [10, 60]
+  bvp_agg_window_s: 1
+  activity_thresholds_g: [0.05, 0.2, 0.5]
+  hrv_min_beats: 3
+  hrv_hampel_window: 5
+  hrv_hampel_sigma: 3.0
+  baseline_windows_s: [3600]
+  longctx_windows_s: [900, 1800, 3600]
+
+model:
+  input_seq_len_s: 300
+  horizons_s: [60, 300, 600]
+  predict_rmssd: true
+  predict_deltas: false
+  predict_vitals: false
+  stride_s: 5
+  hidden_channels: 32
+  tcn_levels: 4
+  kernel_size: 3
+  dropout: 0.1
+  batch_size: 128
+  epochs: 30
+  lr: 0.001
+  nll_beta: 0.5                # beta-NLL: prevents variance-collapse (mean tracks signal)
+  val_fraction: 0.15
+  test_fraction: 0.15
+
+anomaly:
+  ewma_lambda: 0.02
+  z_thresh: 3.0
+  consecutive_required: 3
+  pi_multiplier: 1.96

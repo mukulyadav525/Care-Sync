@@ -56,6 +56,7 @@ file_urls = [
     path('local/upload/', fm_views.upload_local_file, name='api-local-upload'),
     path('local/<str:username>/<str:filename>/', fm_views.view_file_data, name='api-file-data'),
     path('local/<str:username>/<str:filename>/delete/', fm_views.delete_local_file, name='api-delete-file'),
+    path('local/<str:username>/<str:filename>/type/', fm_views.update_document_type, name='api-file-doc-type'),
     # Google Sheets
     path('sheets/', fm_views.view_google_sheets, name='api-sheets-list'),
     path('sheets/upload/', fm_views.upload_google_sheet, name='api-sheets-upload'),

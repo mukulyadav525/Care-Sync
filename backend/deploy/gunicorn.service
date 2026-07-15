@@ -4,9 +4,9 @@ After=network.target
 
 [Service]
 User=ubuntu
-WorkingDirectory=/home/ubuntu/krish22253/backend
-EnvironmentFile=/home/ubuntu/krish22253/backend/.env
-ExecStart=/home/ubuntu/krish22253/backend/.venv/bin/gunicorn \
+WorkingDirectory=/home/ubuntu/Care-Sync/backend
+EnvironmentFile=/home/ubuntu/Care-Sync/backend/.env
+ExecStart=/home/ubuntu/Care-Sync/backend/.venv/bin/gunicorn \
     --workers 3 \
     --bind 127.0.0.1:8000 \
     --timeout 120 \

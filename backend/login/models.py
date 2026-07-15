@@ -111,6 +111,36 @@ class ExcelFile(models.Model):
         return self.name
 
 
+class UploadedDocument(models.Model):
+    """Category metadata for a file uploaded via /api/files/local/upload/.
+
+    The file itself lives on disk under USER_FILES_BASE_DIR/<username>/ (see
+    file_management.py) — this row just tags it with a document type so the
+    Files page can group/filter medical records (labs, prescriptions,
+    medication lists, imaging) instead of showing an undifferentiated list.
+    """
+    DOC_TYPE_CHOICES = [
+        ('lab_report', 'Lab Report'),
+        ('prescription', 'Prescription'),
+        ('medication', 'Medication List'),
+        ('imaging', 'Imaging / Scan'),
+        ('sensor_data', 'Sensor / Device Data'),
+        ('other', 'Other'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='uploaded_documents')
+    filename = models.CharField(max_length=255)
+    doc_type = models.CharField(max_length=20, choices=DOC_TYPE_CHOICES, default='other')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user', 'filename')
+        indexes = [models.Index(fields=['user', 'doc_type'])]
+
+    def __str__(self):
+        return f"UploadedDocument({self.user.username}/{self.filename}: {self.doc_type})"
+
+
 class ContactMessage(models.Model):
     """Message submitted through the contact form."""
     name = models.CharField(max_length=100)

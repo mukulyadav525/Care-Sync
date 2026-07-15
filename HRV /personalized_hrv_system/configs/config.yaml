@@ -1,0 +1,76 @@
+# Configuration for the personalized HR forecasting & anomaly detection system
+
+data:
+  raw_root: "Dataset3/Raw_data"      # relative to project root's parent (the "HRV " folder)
+  subjects: null                      # null = all SXX folders found; or e.g. ["S01","S02"]
+
+resample:
+  freq: "1s"                          # common grid frequency
+
+cleaning:
+  hr_min_bpm: 30
+  hr_max_bpm: 220
+  ibi_min_s: 0.3
+  ibi_max_s: 2.0
+  bvp_bandpass_hz: [0.5, 8.0]
+  eda_lowpass_hz: 1.0
+  max_interpolate_gap_s: 5
+  max_segment_gap_s: 60                # gaps longer than this split the recording into segments
+
+features:
+  hr_windows_s: [30, 60, 300]
+  hrv_windows_s: [60, 300]
+  acc_windows_s: [10, 60]
+  bvp_agg_window_s: 1
+  activity_thresholds_g: [0.05, 0.2, 0.5]   # rest/light/moderate/vigorous boundaries
+  # Tier-2 robust HRV (#7) + subject-baseline (#9) + long-context (#10)
+  hrv_min_beats: 3                 # min valid beats per HRV window (3 keeps coverage on sparse PPG-IBI)
+  hrv_hampel_window: 5             # ectopic-beat rejection window (beats)
+  hrv_hampel_sigma: 3.0
+  baseline_windows_s: [3600]       # personal rolling baseline (deviation features)
+  longctx_windows_s: [900, 1800, 3600]  # 15/30/60-min context summaries
+
+model:
+  input_seq_len_s: 120        # 2 min context — short enough that fragmented ~1hr sessions still yield windows
+  horizons_s: [60, 300, 600]  # 1, 5, 10 minutes ahead
+  predict_rmssd: true          # also forecast RMSSD at each horizon (HRV-aware forecasting)
+  predict_deltas: false        # Tier-2 #11: also predict change-from-now (HR/RMSSD deltas)
+  predict_vitals: false        # Tier-3 #17: also forecast TEMP/EDA (multi-task)
+  stride_s: 5
+  hidden_channels: 32          # right-sized for ~hundreds of windows/subject (was 64 -> overfit)
+  tcn_levels: 4                # receptive field ~61s, matches the 120s window (was 6 -> RF 505 >> window)
+  kernel_size: 3               # (was 5)
+  dropout: 0.2                 # a bit more regularization on small per-subject data
+  batch_size: 64
+  epochs: 40
+  lr: 0.001
+  nll_beta: 0.5                # beta-NLL weight: prevents variance-collapse (mean tracks the signal)
+  val_fraction: 0.15
+  test_fraction: 0.15
+
+anomaly:
+  ewma_lambda: 0.02
+  z_thresh: 3.0
+  consecutive_required: 3
+  pi_multiplier: 1.96
+  # Tier-1/2 uncertainty-normalized detector (used by run_inference / run_simulation)
+  w_hr: 1.0                  # weight on HR uncertainty z-scores
+  w_rmssd: 0.7               # weight on RMSSD uncertainty z-scores
+  baseline_weight: 4.0       # weight on the sustained baseline-deviation (illness) term
+  cusum_weight: 0.5          # weight on the CUSUM drift channel (slow sustained drift)
+  start_percentile: 99.0     # calibrate alert START threshold on this recording's score percentile
+  min_start_thresh: 3.0      # floor for the start threshold
+  stop_fraction: 0.6         # alert STOP threshold = stop_fraction * start (hysteresis)
+  min_duration_s: 20         # sustained seconds required before an alert fires
+  cooldown_s: 60             # quiet period after an alert ends
+  sqi_downweight: true       # multiply score by signal-quality (suppress sensor-noise alerts)
+
+simulation:
+  duration_h: 24
+  sample_rate_hz: 1
+
+online:
+  recent_fraction: 0.2   # fraction of the most recent windows used for each incremental update
+  epochs: 3              # small number of epochs per update (run periodically, e.g. nightly)
+  lr_fraction: 0.1       # fraction of the base training LR used for incremental updates
+  val_fraction: 0.2      # held-out fraction within the recent window, for early-stop tracking

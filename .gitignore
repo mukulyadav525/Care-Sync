@@ -35,3 +35,15 @@ database/*.sqlite3-shm
 # ---------------- Logs ----------------
 *.log
 npm-debug.log*
+
+# ---------------- HRV model system ----------------
+# Raw wearable datasets and trained model artifacts are large/binary and
+# environment-specific; they should never be committed. Point HRV_MODEL_DIR
+# (see docs/HRV_INTEGRATION.md) at wherever a real checkpoint lives locally.
+HRV */personalized_hrv_system/Dataset3/
+HRV */personalized_hrv_system/**/outputs/
+HRV */personalized_hrv_system/**/checkpoints/
+HRV */personalized_hrv_system/**/*.pt
+HRV */personalized_hrv_system/**/*.joblib
+HRV */personalized_hrv_system/**/.ipynb_checkpoints/
+.ipynb_checkpoints/

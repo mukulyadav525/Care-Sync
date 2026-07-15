@@ -1,0 +1,257 @@
+================================================================================
+  HEART-RATE & HRV FORECASTING SYSTEM
+  Datasets: Dataset3 (Stress-Predict) + WESAD   (both Empatica E4)
+  PLAIN-LANGUAGE EXPLANATION OF EVERY STEP
+================================================================================
+
+GOAL : Predict a person's HEART RATE (HR) and HEART-RATE VARIABILITY (HRV /
+       RMSSD) a few minutes into the future, from a wrist smartwatch.
+
+We use TWO datasets that share the exact same sensors, so one model can learn
+from both:
+   - Dataset3 = Stress-Predict (35 healthy adults, Empatica E4)
+   - WESAD     (15 healthy subjects, Empatica E4)
+
+Both are Empatica E4 exports, so they have the SAME SIX VITALS. We use ONLY
+these — nothing else:
+
+   1. HR    - Heart Rate (bpm)               1 Hz
+   2. IBI   - Inter-Beat Interval (s)        per heartbeat (used for HRV)
+   3. ACC   - 3-axis Accelerometer (motion)  32 Hz
+   4. BVP   - Blood Volume Pulse (raw pulse) 64 Hz
+   5. EDA   - Electrodermal Activity (μS)    4 Hz
+   6. TEMP  - Skin Temperature (°C)          4 Hz
+
+(MMASH was dropped because it has no BVP/EDA/TEMP — it would force us to throw
+away half the vitals. Dataset3 and WESAD match perfectly, so we keep all six.)
+
+================================================================================
+  THE PIPELINE (big picture)
+================================================================================
+
+   RAW E4 FILES (HR, IBI, ACC, BVP, EDA, TEMP)
+        |
+        v
+   [1] LOAD + RESAMPLE   -> put every vital on a common 1-second grid
+        |
+        v
+   [2] CLEAN             -> filter noise, clip impossible values, fill tiny gaps
+        |
+        v
+   [3] FEATURES          -> turn the 6 vitals into ~60 numbers per second
+        |                   (rolling stats, HRV, activity, time-of-day)
+        v
+   [4] TARGETS           -> "what is HR & RMSSD 1/5/10 minutes from now?"
+        |
+        v
+   [5] WINDOWING         -> slice into (past 5 min of features -> future HR/HRV)
+        |
+        v
+   [6] SPLIT 70/30       -> 70% of people for training, 30% held out for testing
+        |
+        v
+   [7] TRAIN MODEL       -> TCN / LSTM / GRU / Transformer / XGBoost
+        |
+        v
+   [8] TEST + SCORE      -> MAE, RMSE, MAPE, R2, bias, correlation
+
+Everything is CAUSAL: at any second we only use information from the PAST, never
+the future. This is what lets the same code run live on a real watch stream.
+
+================================================================================
+  STEP-BY-STEP DETAIL
+================================================================================
+
+--------------------------------------------------------------------------------
+STEP 1 — LOAD + RESAMPLE   (src/data/loader.py, sync.py)
+--------------------------------------------------------------------------------
+The six vitals are recorded at different speeds, so we line them all up on one
+common 1-second clock:
+   HR    -> average per second
+   ACC   -> remove gravity, compute motion magnitude, take mean/std/max per sec
+   EDA   -> low-pass smooth, then average per second
+   TEMP  -> average per second
+   BVP   -> band-pass filtered, kept at full rate for pulse analysis
+   IBI   -> the real beat-to-beat gaps, used to compute HRV
+WESAD stores these CSVs nested in <SID>/<SID>_E4_Data/ — the loader finds them
+automatically, so both datasets load with the same code.
+
+--------------------------------------------------------------------------------
+STEP 2 — CLEAN   (src/data/cleaning.py)
+--------------------------------------------------------------------------------
+   - HR clipped to a human range (30-220 bpm).
+   - IBI clipped to plausible beat gaps (0.3-2.0 s).
+   - BVP band-pass filtered (0.5-8 Hz) to isolate the real pulse.
+   - EDA low-pass filtered to remove jitter.
+   - ACC high-pass filtered to remove gravity (so we measure MOVEMENT, not tilt).
+   - Gaps <= 5 s are interpolated; longer gaps stay "missing" and any window
+     touching them is skipped (we never train on invented data).
+
+--------------------------------------------------------------------------------
+STEP 3 — FEATURES   (src/features/*.py)
+--------------------------------------------------------------------------------
+We convert the six vitals into ~60 numbers per second describing the recent
+past. All windows look backward only (causal). Feature families, each built from
+the six vitals only:
+
+   From HR      : rolling mean/std/min/max over 30/60/300 s, short-term trend,
+                  rate-of-change, distance from recent baseline.
+   From IBI     : HRV metrics RMSSD and SDNN over 60/300 s windows.
+                  (Low HRV = stress/fatigue; high HRV = relaxed/recovered.)
+   From ACC     : movement intensity + an activity bucket (rest/light/moderate/
+                  vigorous).
+   From BVP     : pulse-shape statistics from the optical waveform.
+   From EDA     : tonic level + phasic "arousal" bursts (sweat responses).
+   From TEMP    : skin-temperature level and deviation from its own baseline.
+   Time         : hour-of-day as sine/cosine + a personal per-hour HR baseline
+                  ("circadian" features).
+
+--------------------------------------------------------------------------------
+STEP 4 — TARGETS (what we predict)   (build_features.py)
+--------------------------------------------------------------------------------
+For every second t we create the future values to learn:
+   HR_target_60s   = HR at t+60   (1 minute ahead)
+   HR_target_300s  = HR at t+300  (5 minutes ahead)
+   HR_target_600s  = HR at t+600  (10 minutes ahead)
+and the same for RMSSD (so we forecast HRV too):
+   RMSSD_target_60s / _300s / _600s
+These are just future readings shifted back to "now" so the model learns
+(past features -> future HR & HRV).
+
+--------------------------------------------------------------------------------
+STEP 5 — WINDOWING   (src/models/datasets.py)
+--------------------------------------------------------------------------------
+A model needs fixed-size inputs, so we slide a window over time:
+   X = the last 300 seconds (5 min) of all features  -> shape (300, ~60)
+   y = the HR & RMSSD targets at the END of the window
+Any window containing a missing value is skipped.
+
+--------------------------------------------------------------------------------
+STEP 6 — TRAIN / TEST SPLIT (70 / 30)   (multi_dataset_pipeline.py)
+--------------------------------------------------------------------------------
+We pool subjects from BOTH datasets and split by PERSON:
+   70% of subjects (from each dataset) -> TRAIN
+   30% of subjects (held out entirely) -> TEST
+WHY split by person and not randomly? Seconds next to each other are nearly
+identical, so random splitting would put the same person in both train and test
+= cheating. Holding out WHOLE PEOPLE tests the real question: does it work on a
+NEW person it has never seen?
+
+Features are standardized (mean 0, std 1) using TRAIN statistics only, then the
+same transform is applied to the test people. Because both datasets share the
+same six vitals, the model uses the full feature set.
+
+--------------------------------------------------------------------------------
+STEP 7 — THE MODELS   (src/models/*.py)
+--------------------------------------------------------------------------------
+Five models are supported so we can benchmark them. Each outputs, for every
+horizon, BOTH a predicted value AND an uncertainty (mean + std), trained with
+Gaussian negative-log-likelihood. The std gives us confidence intervals.
+
+   1) TCN  (Temporal Convolutional Network)  [DEFAULT, usually best]
+        stacked dilated 1-D convolutions; sees long history efficiently.
+   2) LSTM  - recurrent net with memory gates; strong baseline.
+   3) GRU   - lighter LSTM; often just as good.
+   4) Transformer - self-attention over the window.
+   5) XGBoost - gradient-boosted trees on the latest feature vector (no memory).
+        Fast, robust, great sanity-check baseline.
+
+--------------------------------------------------------------------------------
+STEP 8 — TRAINING   (src/models/train.py)
+--------------------------------------------------------------------------------
+   - Deep models: Adam optimizer, 30 epochs by default; the best validation
+     checkpoint is kept (prevents overfitting). Loss rewards an accurate value
+     AND a well-calibrated uncertainty.
+   - XGBoost: builds 200 trees, each correcting the previous trees' errors.
+
+--------------------------------------------------------------------------------
+STEP 9 — TESTING & SCORING   (src/evaluation/metrics.py)
+--------------------------------------------------------------------------------
+We score ONLY on the held-out 30% of people, per horizon and overall, and also
+break results down per dataset (Stress-Predict vs WESAD):
+
+   MAE   - Mean Absolute Error (avg bpm off).      LOWER = better. Intuitive.
+   RMSE  - Root Mean Squared Error (punishes big misses). LOWER = better.
+   MAPE  - Mean Absolute % Error.                  LOWER = better.
+   R2    - fraction of HR variation explained (1 = perfect, 0 = guessing mean).
+   bias  - average signed error (+ over-predict, - under-predict).
+   pearson_r - correlation of predicted vs true HR shape (1 = perfect).
+   (plus std_error, median_AE, max_AE for spread and worst case.)
+
+These are REGRESSION metrics because HR and HRV are numbers, not categories.
+
+================================================================================
+  HOW TO RUN
+================================================================================
+First set the dataset paths in configs/config_multi.yaml ->
+   stress_predict.raw_root  (your Dataset3/Raw_data path)
+   wesad.raw_root           (your WESAD path)
+
+Pooled 70/30 across both datasets (the main run):
+   python3 scripts/run_multi_dataset.py --model tcn
+   python3 scripts/run_multi_dataset.py --model xgboost
+
+Train on a single dataset only:
+   python3 scripts/run_training.py --subject S01 --model tcn --config configs/config.yaml         # Dataset3
+   python3 scripts/run_training.py --subject S2  --model tcn --config configs/config_wesad.yaml    # WESAD
+
+Outputs:
+   models/multi/<model>/   pooled model + scaler + metadata
+   models/<SID>/<model>/   single-subject models
+   processed/              feature CSVs
+
+================================================================================
+  Q & A
+================================================================================
+
+Q1. What exactly do we predict?
+    Heart rate and HRV (RMSSD) 1, 5, and 10 minutes into the future, using only
+    the past readings of the six E4 vitals.
+
+Q2. Which vitals do we use, and why only these?
+    HR, IBI, ACC, BVP, EDA, TEMP. These are the ones present in BOTH Dataset3
+    and WESAD. Using only shared vitals means one model can train on both
+    datasets without missing-data problems.
+
+Q3. Why combine two datasets?
+    More people and more variety = a model that generalises better. Because both
+    are Empatica E4, their signals are directly compatible.
+
+Q4. Why split 70/30 by person instead of randomly?
+    Time-series points are highly correlated; random splitting leaks the same
+    person into train and test, inflating the score. Holding out whole people
+    tests true generalisation to someone new.
+
+Q5. What is "causal" and why does it matter?
+    Every feature uses only past data. Without this, offline scores would be
+    optimistic and the model would fail when run live on a real watch.
+
+Q6. What is HRV / RMSSD?
+    Beat-to-beat variation in the heartbeat, computed from IBI. High = relaxed/
+    recovered; low = stress/fatigue. We both use it as a feature and forecast it.
+
+Q7. Why five models?
+    To benchmark. TCN usually wins, but if the simple XGBoost baseline matches a
+    deep model, the extra complexity isn't worth it.
+
+Q8. Why predict an uncertainty (std), not just a number?
+    A range (mean +/- std) gives confidence intervals and tells us when the
+    model itself is unsure (noisy or unusual periods).
+
+Q9. What do MAE, RMSE, R2, bias mean?
+    MAE = average error in bpm. RMSE = error that punishes big misses. R2 = how
+    much of HR's variation we explain (1 = perfect). bias = systematic over/
+    under-shoot. Together: accuracy, worst case, explanatory power, offset.
+
+Q10. How is this real-time capable?
+     Causal, cheap features + small models + one forward pass per second. The
+     same code that scores offline can run on a live stream.
+
+Q11. What are the limitations?
+     Wrist PPG is noisier than clinical ECG, so HRV is approximate. Both cohorts
+     are limited in size/diversity, so results may not transfer to every
+     population.
+
+================================================================================
+  END
+================================================================================
