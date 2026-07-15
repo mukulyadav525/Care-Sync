@@ -1,24 +1,29 @@
-Django>=6.0
-djangorestframework>=3.17
-djangorestframework-simplejwt>=5.5
-django-cors-headers>=4.9
-whitenoise>=6.12
+# Version floors kept modest (not exact pins) so this installs on whatever
+# Python is actually available on a given server — the previous exact/high
+# pins here (and in ai/requirements.txt) assumed Python 3.12+ and failed
+# outright on older servers. pip will pick the newest version compatible
+# with whatever Python is running this.
+Django>=4.2,<6.0
+djangorestframework>=3.14
+djangorestframework-simplejwt>=5.3
+django-cors-headers>=4.3
+whitenoise>=6.6
 # Data science & signal processing
-numpy>=2.0
-pandas>=3.0
-scipy>=1.18
-matplotlib>=3.11
-plotly>=6.8
-bokeh>=3.9
+numpy>=1.24
+pandas>=2.0
+scipy>=1.10
+matplotlib>=3.7
+plotly>=5.18
+bokeh>=3.3
 # Google APIs
-gspread>=6.2
+gspread>=6.0
 oauth2client>=4.1
-google-auth>=2.55
-google-auth-oauthlib>=1.4
-google-api-python-client>=2.197
+google-auth>=2.25
+google-auth-oauthlib>=1.2
+google-api-python-client>=2.110
 # PDF generation
-reportlab>=5.0
+reportlab>=4.0
 # Utilities
-chardet>=7.0
-Pillow>=12.0
-requests>=2.34
+chardet>=5.2
+Pillow>=10.2
+requests>=2.31

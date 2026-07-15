@@ -28,10 +28,14 @@ def main():
     parser.add_argument("--epochs", type=int, default=None, help="Override fine-tune epoch count (default: cfg epochs // 3)")
     parser.add_argument("--lr", type=float, default=None, help="Override fine-tune learning rate (default: cfg lr / 5)")
     parser.add_argument("--freeze-backbone", action="store_true", help="Freeze all layers except the output heads")
+    parser.add_argument("--raw-root", default=None,
+                         help="Override cfg data.raw_root - e.g. point at Care-Sync real session storage "
+                              "(backend/Users) instead of the demo dataset. --subject can then be "
+                              "'<username>/<session_name>'.")
     args = parser.parse_args()
 
     cfg = yaml.safe_load(open(args.config))
-    raw_root = (ROOT.parent / cfg["data"]["raw_root"]).resolve()
+    raw_root = Path(args.raw_root).resolve() if args.raw_root else (ROOT.parent / cfg["data"]["raw_root"]).resolve()
     subject_dir = raw_root / args.subject
 
     out_dir = Path(args.out) if args.out else ROOT / "models" / args.subject / "finetuned"

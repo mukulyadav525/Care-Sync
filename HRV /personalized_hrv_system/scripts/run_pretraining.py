@@ -26,10 +26,13 @@ def main():
     parser.add_argument("--model", default="tcn", choices=["tcn", "lstm", "gru", "transformer"])
     parser.add_argument("--config", default=str(ROOT / "configs" / "config.yaml"))
     parser.add_argument("--out", default=None, help="Output directory for the global model artifacts")
+    parser.add_argument("--raw-root", default=None,
+                         help="Override cfg data.raw_root - e.g. point at Care-Sync real session storage "
+                              "(backend/Users) instead of the demo dataset.")
     args = parser.parse_args()
 
     cfg = yaml.safe_load(open(args.config))
-    raw_root = (ROOT.parent / cfg["data"]["raw_root"]).resolve()
+    raw_root = Path(args.raw_root).resolve() if args.raw_root else (ROOT.parent / cfg["data"]["raw_root"]).resolve()
 
     if args.all:
         subject_dirs = sorted(p for p in raw_root.iterdir() if p.is_dir() and p.name.startswith("S"))

@@ -54,14 +54,18 @@ def get_trends():
             if hour_df.empty:
                 continue
 
+            # float(...) before round(...): pandas .mean() returns a numpy
+            # scalar, and round() on a bare numpy scalar can produce a
+            # non-JSON-serializable value (or a literal "np.float64(...)"
+            # repr if it ever gets stringified) instead of a plain number.
             hr_points.append({
                 "hour": hour,
-                "value": round(hour_df["heart_rate"].mean(), 2)
+                "value": round(float(hour_df["heart_rate"].mean()), 2)
             })
 
             stress_points.append({
                 "hour": hour,
-                "value": round(hour_df["stress_score"].mean(), 2)
+                "value": round(float(hour_df["stress_score"].mean()), 2)
             })
 
         heart_rate.append({

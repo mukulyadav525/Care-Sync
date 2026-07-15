@@ -10,7 +10,7 @@ separated layers plus a small device-side ingestion service.
 ├── backend/            # Django 6 + DRF REST API (business logic, auth, HL7)
 ├── ai/                 # FastAPI agentic pipeline (signal analysis, chatbot, trends)
 ├── database/           # SQLite database file (db.sqlite3)
-└── device-ingestion/   # Standalone Flask scripts that receive raw sensor data
+└── device-ingestion/   # Device-side heartbeat helper (posts to backend's device API)
 ```
 
 ## Layers
@@ -103,16 +103,17 @@ Holds the SQLite database (`db.sqlite3`). The backend resolves this path
 automatically (`BASE_DIR.parent / 'database' / 'db.sqlite3'`).
 
 ### `device-ingestion/`
-Standalone Flask servers used by the wearable/hardware to stream raw sensor
-CSV data. These are independent of the Django web stack and are run directly
-on the data-collection machine.
+`heartbeat.py` — minimal script the wearable/ingestion side calls periodically
+(and on session start/stop) to POST a heartbeat to the Django backend
+(`/api/devices/heartbeat/`, authenticated with a per-device key issued in
+**Devices** on the portal) so the UI can show the device online/offline with
+battery + firmware info. See the "Connected devices" section below.
 
-- `start_session_server.py` — fixed upload directory
-- `user_session_server.py` — prompts for a username and writes per-user files
-
-```bash
-python device-ingestion/start_session_server.py   # listens on :5000
-```
+(Two older standalone Flask CSV-upload scripts that lived here —
+`start_session_server.py` / `user_session_server.py` — were removed: they
+were hardcoded to a different machine's local paths and weren't called by
+anything else in this repo. Real session data comes in through the Signal
+Portal's session folders, not those scripts.)
 
 ## Connected devices
 Register wearables under **Devices** (`/devices`). Each registration returns a

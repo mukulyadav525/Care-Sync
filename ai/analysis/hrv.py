@@ -33,26 +33,31 @@ class HRVAnalyzer:
 
     def calculate(self, rr):
 
+        # float(...) before round(...): round() on a bare numpy scalar
+        # returns another numpy scalar (repr "np.float64(15.62)"), which
+        # leaked into the AI report and chat responses verbatim. Casting to
+        # a native Python float first gives a plain "15.62" everywhere
+        # downstream (JSON, f-strings, the report template).
         return {
 
             "rmssd":
 
-                round(self.rmssd(rr),2),
+                round(float(self.rmssd(rr)), 2),
 
             "sdnn":
 
-                round(self.sdnn(rr),2),
+                round(float(self.sdnn(rr)), 2),
 
             "mean_rr":
 
-                round(self.mean_rr(rr),2),
+                round(float(self.mean_rr(rr)), 2),
 
             "mean_hr":
 
-                round(self.mean_hr(rr),2),
+                round(float(self.mean_hr(rr)), 2),
 
             "pnn50":
 
-                round(self.pnn50(rr),2)
+                round(float(self.pnn50(rr)), 2)
 
         }

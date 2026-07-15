@@ -373,16 +373,6 @@ export default function SessionDashboard() {
           </button>
         </form>
       </div>
-
-      {/* Info */}
-      {data.info && (
-        <details className="glass-panel" style={{ padding: '1.25rem 1.5rem' }}>
-          <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Session info (info.txt)</summary>
-          <pre style={{ marginTop: '1rem', whiteSpace: 'pre-wrap', fontSize: '0.8rem', color: 'var(--text-muted)', fontFamily: 'inherit' }}>
-            {data.info}
-          </pre>
-        </details>
-      )}
     </div>
   );
 }

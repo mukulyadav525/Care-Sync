@@ -9,7 +9,11 @@ from datetime import timedelta
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DEBUG', 'True') == 'True'
+# Defaults to False (fail closed) — DEBUG must be explicitly opted into for
+# local development via `DEBUG=True` in backend/.env. A forgotten/missing env
+# var now means production hardening stays ON, instead of silently exposing
+# stack traces, SQL, and settings to every visitor.
+DEBUG = os.environ.get('DEBUG', 'False') == 'True'
 
 # SECURITY WARNING: keep the secret key used in production secret!
 # A hard-coded dev key is only used while DEBUG is on; production must supply
@@ -140,6 +144,7 @@ REST_FRAMEWORK = {
         'auth': '10/min',       # login / signup attempts per IP
         'otp': '6/min',         # OTP verification attempts per IP
         'heartbeat': '120/min', # device heartbeats per IP
+        'upload': '20/min',     # file uploads per authenticated user
     },
 }
 

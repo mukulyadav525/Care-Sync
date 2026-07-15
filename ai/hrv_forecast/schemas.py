@@ -62,6 +62,9 @@ class ForecastResponse(BaseModel):
         ..., description="'trained' if a real checkpoint served this forecast, else 'mock' (persistence heuristic)"
     )
     model_version: str
+    personalized: bool = Field(
+        False, description="True if this subject has their own fine-tuned checkpoint (vs the shared global/mock model)"
+    )
     horizons: list[HorizonForecast]
 
 
@@ -110,4 +113,5 @@ class HRVStatusResponse(BaseModel):
     model_status: str
     model_version: str
     checkpoint_dir: Optional[str] = None
+    personalized: bool = False
     detail: str

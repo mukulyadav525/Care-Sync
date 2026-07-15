@@ -32,21 +32,111 @@ One data-shape note: the pipeline computes RMSSD from raw IBI beats
 instead, `feature_adapter.py` adds a fallback `RMSSD_provided` column so
 anomaly/digital-twin still use real HRV numbers either way.
 
-## Deploying the trained forecaster (what's left)
+## Personalization: how a model runs per user
 
-You said you're training a baseline model on your own server — once that's
-done:
+`HRV_MODEL_DIR` is a **base directory**, not a single model. The loader
+(`ai/hrv_forecast/model_loader.py`) resolves a checkpoint per request using
+this order, and caches each directory it loads (so many users sharing the
+global model only pay the load cost once):
 
-1. Confirm the checkpoint directory has what `src/pipeline/inference_pipeline.load_model()`
-   expects: `meta.joblib`, `scaler.joblib`, and either `<model_type>_model.pt`
-   (torch models) or an `xgb/` directory (XGBoost).
-2. `pip install torch joblib xgboost scikit-learn` inside `ai/.venv` (commented
-   out in `ai/requirements.txt` today so the mock-only path stays light).
-3. Set `HRV_MODEL_DIR=/absolute/path/to/checkpoint` in `ai/.env`.
-4. Restart the `ai` service (`sudo systemctl restart ai-service` if using the
-   systemd unit below). `GET /hrv/status` should flip to `"model_status": "trained"`.
-5. Nothing else changes — `/hrv/forecast`'s request/response shape is
-   identical in mock and trained mode.
+```
+HRV_MODEL_DIR/<subject_id>/     <- that user's personally fine-tuned model (used if it exists)
+HRV_MODEL_DIR/global/           <- population baseline (used for every user without a personal model yet)
+HRV_MODEL_DIR/  (flat)          <- back-compat: a single checkpoint straight in HRV_MODEL_DIR, used for everyone
+```
+
+`subject_id` is whatever the frontend sends as `owner`/username on
+`/hrv/forecast|anomaly|digital-twin`. `GET /hrv/status?subject_id=<user>`
+tells you which tier is currently serving that specific user
+(`personalized: true/false` + `checkpoint_dir`).
+
+### 1. Train the baseline (global/population) model — do this once
+
+The research pipeline in `HRV /personalized_hrv_system` expects Empatica-E4
+style CSVs (`HR.csv`, `BVP.csv`, `IBI.csv`, `ACC.csv`, `EDA.csv`, `TEMP.csv`,
+`tags*.csv`) inside one folder per subject. `configs/config.yaml` points at
+the open-source demo dataset (`data.raw_root: Dataset3/Raw_data`) by default
+— that's fine for the baseline, since its whole point is generic population
+signal, not any one person's data.
+
+```bash
+cd "HRV /personalized_hrv_system"
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt   # torch, joblib, xgboost, scikit-learn etc.
+
+# Trains on every S## subject folder found under the configured raw_root
+python scripts/run_pretraining.py --all --model tcn --out ../../hrv_models/global
+```
+
+That writes `meta.joblib`, `scaler.joblib`, `tcn_model.pt` into
+`hrv_models/global/` (adjust `--out` to wherever you want `HRV_MODEL_DIR` to
+live — it doesn't have to be inside the repo).
+
+### 2. Point the ai/ service at it
+
+```bash
+# ai/.env
+HRV_MODEL_DIR=/absolute/path/to/hrv_models
+```
+
+Restart the service (`systemctl --user restart ai-service` or however you're
+running uvicorn). `GET /hrv/status` now reports `"model_status": "trained"`,
+`"personalized": false` (everyone's on the shared global model) — that's the
+expected state right after step 1, for every user.
+
+### 3. Personalize per user — fine-tune on their real Care-Sync sessions
+
+Care-Sync stores each recorded session at `backend/Users/<username>/<session_name>/`
+with exactly the same file layout the research pipeline reads (`HR.csv`,
+`IBI.csv`, `ACC.csv`, ...). So a real user's own session can be fed straight
+in — no format conversion needed. Point `--raw-root` at the backend's Users
+folder and use `<username>/<session_name>` as the subject:
+
+```bash
+cd "HRV /personalized_hrv_system"
+source .venv/bin/activate
+
+python scripts/run_finetune.py \
+  --subject mukul23/session_demo \
+  --raw-root ../../backend/Users \
+  --pretrained ../../hrv_models/global \
+  --out ../../hrv_models/mukul23
+```
+
+That fine-tunes the global weights on just that user's recording (small
+learning rate, few epochs — see `run_finetune.py --help` for
+`--epochs`/`--lr`/`--freeze-backbone`) and saves the result to
+`hrv_models/mukul23/`. No restart or env change needed — `model_loader.py`
+resolves `HRV_MODEL_DIR/mukul23/` automatically on the next request for that
+user, and only that user gets served the personal model; everyone else keeps
+using `global/`. `GET /hrv/status?subject_id=mukul23` should now report
+`"personalized": true`.
+
+**Requirements**: fine-tuning needs at least ~20 training windows once
+features are built (`input_seq_len_s=120`, `stride_s=5` in `config.yaml`) —
+in practice that means at least a few tens of minutes of continuous
+recording per session; longer/more sessions personalize better. If a user
+doesn't have enough data yet, `run_finetune.py` raises a clear
+`ValueError` rather than saving a bad model — just keep serving them the
+global model until they've recorded more.
+
+**Current limitation**: fine-tuning reads one subject *folder* at a time.
+If a user has several sessions and you want to combine them into one
+fine-tune run rather than just using their longest single session, that
+needs a small merge step (concatenating each signal's real timestamps across
+sessions) that isn't built yet — flagged here rather than silently skipped.
+For now, pick the user's richest single session as `--subject
+<username>/<best_session>`, or re-run fine-tuning against a newer session as
+it becomes available (each run overwrites `hrv_models/<username>/`).
+
+### 4. Keep it current — re-run fine-tuning as data accumulates
+
+There's no cron job wired up yet. The simplest path: re-run step 3's command
+periodically (e.g. weekly, or after a user logs a long new session) — it's
+idempotent and just overwrites that user's directory. Automating this via
+the `online.*` config block (`scripts/run_online_update.py`, incremental
+nightly updates on recent windows) is a documented but not yet wired-up next
+step — see that script's docstring.
 
 ## Deploying today — checklist
 
@@ -62,10 +152,11 @@ done:
 - [ ] `netlify.toml` → `NEXT_PUBLIC_AI_API_URL` (new) set to your ai service URL — currently a placeholder, must be filled in before deploying or the dashboard's chat/trends widgets will try to hit `127.0.0.1:8001`.
 - [ ] Trigger a Netlify deploy after changing `netlify.toml` env vars (build-time env, not runtime).
 
-**Known gap:** the frontend doesn't call `/hrv/forecast`, `/hrv/anomaly`, or
-`/hrv/digital-twin` yet — there's no dashboard widget for them. The API is
-live and real (see table above); wiring it into a UI is a separate follow-up
-if you want it visualized.
+The frontend calls `/hrv/forecast`, `/hrv/anomaly`, and `/hrv/digital-twin`
+from `frontend/src/components/HRVInsights.tsx`, mounted on the session detail
+page (`/portal/[owner]/[session]`) — forecast chart, resting/sleep/walking
+vitals, and anomaly alert banner (with buzz + email) all come from that
+component.
 
 ## Repo hygiene notes
 
@@ -76,5 +167,12 @@ if you want it visualized.
   gitignored.
 - Datasets, trained checkpoints, and notebook checkpoint folders under
   `HRV /personalized_hrv_system` are gitignored — large/binary/environment-specific,
-  shouldn't be committed. Your server-trained checkpoint stays on the server
-  and is referenced by path via `HRV_MODEL_DIR`, not committed to git.
+  shouldn't be committed. Your server-trained checkpoints (`hrv_models/`)
+  stay on the server and are referenced by path via `HRV_MODEL_DIR`, not
+  committed to git.
+- `device-ingestion/user_session_server.py` and `start_session_server.py`
+  were removed — they were leftover duplicate Flask scripts from an earlier
+  hardware setup (hardcoded to a different machine's paths,
+  `/home/megha21337/...`), never called by anything in this repo. The only
+  ingestion script actually wired to the backend is `heartbeat.py` (posts to
+  `/api/devices/heartbeat/`), which stays.

@@ -27,7 +27,14 @@ frontend/build/
 next-env.d.ts
 
 # ---------------- Database ----------------
-# The SQLite dev DB is tracked intentionally; ignore journal/wal side files.
+# db.sqlite3 holds real user accounts (emails, password hashes), health
+# session data, device keys, and consent records — this is exactly the kind
+# of medical/PII data the rest of this project's security model exists to
+# protect, so it must never be committed. (It was previously tracked
+# intentionally as a "dev DB" — that was a mistake once real user signups
+# started landing in it; removed via `git rm --cached` and gitignored here.
+# See SECURITY_NOTE.md for what to do about the already-pushed history.)
+database/*.sqlite3
 database/*.sqlite3-journal
 database/*.sqlite3-wal
 database/*.sqlite3-shm

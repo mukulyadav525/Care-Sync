@@ -40,4 +40,4 @@ class PeakDetector:
 
             return 0
 
-        return 60000 / np.mean(rr)
+        return float(60000 / np.mean(rr))

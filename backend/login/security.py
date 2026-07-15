@@ -3,7 +3,7 @@ Shared security helpers for the login app.
 """
 import os
 
-from rest_framework.throttling import AnonRateThrottle
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 
 
 def safe_join(base: str, *parts: str) -> str | None:
@@ -36,3 +36,12 @@ class OTPRateThrottle(AnonRateThrottle):
 class HeartbeatRateThrottle(AnonRateThrottle):
     """Throttle device heartbeats by client IP (rate: 'heartbeat')."""
     scope = 'heartbeat'
+
+
+class UploadRateThrottle(UserRateThrottle):
+    """Throttle file uploads per authenticated user (rate: 'upload').
+    Uploads are always authenticated (IsAuthenticated), so this must be
+    UserRateThrottle, not AnonRateThrottle — DRF's AnonRateThrottle skips
+    throttling entirely once request.user is authenticated (its cache key
+    is None for authenticated requests), which would make it a no-op here."""
+    scope = 'upload'

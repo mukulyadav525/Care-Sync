@@ -7,7 +7,7 @@ ai/hrv_forecast/model_loader.py and docs/HRV_INTEGRATION.md). The response
 shapes are stable across both, so callers don't need to change when the real
 model comes online.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from ai.hrv_forecast import service
 from ai.hrv_forecast.schemas import (
@@ -24,10 +24,10 @@ router = APIRouter(prefix="/hrv", tags=["hrv"])
 
 
 @router.get("/status", response_model=HRVStatusResponse)
-def hrv_status():
-    """Reports whether requests are being served by the real trained model
-    or the mock engine, and why."""
-    return service.get_status()
+def hrv_status(subject_id: str = Query("global", description="Check which checkpoint (personal/global/mock) would serve this user")):
+    """Reports whether requests for this subject are served by their personal
+    fine-tuned checkpoint, the shared global model, or the mock engine."""
+    return service.get_status(subject_id)
 
 
 @router.post("/forecast", response_model=ForecastResponse)

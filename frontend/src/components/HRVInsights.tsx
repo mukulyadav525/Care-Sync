@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from 'react';
-import { HeartPulse, AlertTriangle, ShieldCheck, TrendingUp, Info, BellRing } from 'lucide-react';
+import { HeartPulse, AlertTriangle, ShieldCheck, TrendingUp, Info, BellRing, Moon, Footprints, Armchair, Flame } from 'lucide-react';
+import {
+  ComposedChart, Area, Line as RLine, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from 'recharts';
 import api from '@/lib/api';
 
 const AI_API_URL = process.env.NEXT_PUBLIC_AI_API_URL || 'http://127.0.0.1:8001';
@@ -13,6 +16,7 @@ interface SignalsMap {
   IBI?: { series: SeriesPoint[] };
   TEMP?: { series: SeriesPoint[] };
   EDA?: { series: SeriesPoint[] };
+  ACC?: { series: SeriesPoint[] };
 }
 
 interface HorizonForecast {
@@ -49,6 +53,11 @@ function buildSamples(signals: SignalsMap) {
   const ibiByT = new Map((signals.IBI?.series || []).map((p) => [p.t, p.value]));
   const tempByT = new Map((signals.TEMP?.series || []).map((p) => [p.t, p.value]));
   const edaByT = new Map((signals.EDA?.series || []).map((p) => [p.t, p.value]));
+  // ACC magnitude (g) — required for physiological-state classification
+  // (sleep/rest/walking/exercise), which the digital twin and circadian
+  // baseline depend on. Without this, state stays "unknown" forever and
+  // resting/sleep/walking HR never populate.
+  const accByT = new Map((signals.ACC?.series || []).map((p) => [p.t, p.value]));
 
   return hrSeries.map((p) => {
     const ibiMs = ibiByT.get(p.t);
@@ -58,6 +67,8 @@ function buildSamples(signals: SignalsMap) {
     if (temp !== undefined) sample.temp = temp;
     const eda = edaByT.get(p.t);
     if (eda !== undefined) sample.eda = eda;
+    const acc = accByT.get(p.t);
+    if (acc !== undefined) sample.acc_mag = acc;
     return sample;
   });
 }
@@ -176,6 +187,23 @@ export default function HRVInsights({ signals, owner, session }: { signals: Sign
   if (!samples) return null;
 
   const isAlert = anomaly?.severity === 'alert';
+  const lastHr = samples[samples.length - 1]?.hr as number | undefined;
+
+  const chartData = forecast ? [
+    ...(lastHr != null ? [{ label: 'now', hr: lastHr, band: [lastHr, lastHr] as [number, number] }] : []),
+    ...forecast.horizons.map((h) => ({
+      label: `+${Math.round(h.horizon_s / 60)}m`,
+      hr: h.hr_pred,
+      band: [h.hr_lower, h.hr_upper] as [number, number],
+    })),
+  ] : [];
+
+  const twinTiles = twin ? [
+    { label: 'Resting', value: twin.resting_hr, icon: Armchair, color: '#3b82f6' },
+    { label: 'Sleep', value: twin.sleep_hr, icon: Moon, color: '#6366f1' },
+    { label: 'Walking', value: twin.walking_hr, icon: Footprints, color: '#10b981' },
+    { label: 'Running/Exercise', value: twin.running_hr, icon: Flame, color: '#f59e0b' },
+  ] : [];
 
   return (
     <div
@@ -232,20 +260,31 @@ export default function HRVInsights({ signals, owner, session }: { signals: Sign
                 {statusBadge(twin.model_status)}
               </div>
               {!twin.calibrated && (
-                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
-                  Not fully calibrated yet — more history improves accuracy.
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+                  Not fully calibrated — resting/sleep/walking HR need enough
+                  movement (ACC) data to tell states apart, and enough
+                  history for the circadian baseline. Improves automatically
+                  the more this person is monitored.
                 </p>
               )}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', fontSize: '0.82rem' }}>
-                <span>Resting HR: <strong>{twin.resting_hr != null ? `${twin.resting_hr.toFixed(0)} bpm` : '—'}</strong></span>
-                <span>Sleep HR: <strong>{twin.sleep_hr != null ? `${twin.sleep_hr.toFixed(0)} bpm` : '—'}</strong></span>
-                <span>Walking HR: <strong>{twin.walking_hr != null ? `${twin.walking_hr.toFixed(0)} bpm` : '—'}</strong></span>
-                <span>Avg RMSSD: <strong>{twin.avg_rmssd != null ? `${twin.avg_rmssd.toFixed(1)} ms` : '—'}</strong></span>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem' }}>
+                {twinTiles.map((tile) => (
+                  <div key={tile.label} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem', borderRadius: 'var(--radius-sm)', background: 'var(--panel-bg-light)' }}>
+                    <tile.icon size={15} color={tile.value != null ? tile.color : 'var(--text-muted)'} />
+                    <div>
+                      <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{tile.label}</p>
+                      <p style={{ fontSize: '0.85rem', fontWeight: 700 }}>{tile.value != null ? `${tile.value.toFixed(0)} bpm` : '—'}</p>
+                    </div>
+                  </div>
+                ))}
               </div>
+              <p style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>
+                Avg RMSSD: <strong>{twin.avg_rmssd != null ? `${twin.avg_rmssd.toFixed(1)} ms` : '—'}</strong>
+              </p>
             </div>
           )}
 
-          {/* Forecast */}
+          {/* Forecast (summary tiles — chart is below, full width) */}
           {forecast && (
             <div style={{ padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
@@ -258,7 +297,7 @@ export default function HRVInsights({ signals, owner, session }: { signals: Sign
                 {forecast.horizons.map((h) => (
                   <span key={h.horizon_s}>
                     +{Math.round(h.horizon_s / 60)} min: <strong>{h.hr_pred.toFixed(0)} bpm</strong>
-                    <span style={{ color: 'var(--text-muted)' }}> ({h.hr_lower.toFixed(0)}–{h.hr_upper.toFixed(0)})</span>
+                    {h.rmssd_pred != null && <span style={{ color: 'var(--text-muted)' }}> · RMSSD {h.rmssd_pred.toFixed(0)}ms</span>}
                     {h.temp_pred != null && <span style={{ color: 'var(--text-muted)' }}> · {h.temp_pred.toFixed(1)}°C</span>}
                     {h.eda_pred != null && <span style={{ color: 'var(--text-muted)' }}> · {h.eda_pred.toFixed(2)}µS</span>}
                   </span>
@@ -266,6 +305,27 @@ export default function HRVInsights({ signals, owner, session }: { signals: Sign
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* HR forecast chart — trajectory + confidence band */}
+      {forecast && chartData.length > 1 && (
+        <div>
+          <p style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+            HR trajectory (shaded band = forecast uncertainty)
+          </p>
+          <div style={{ height: 220 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+                <YAxis domain={['auto', 'auto']} tick={{ fontSize: 12 }} unit=" bpm" />
+                <Tooltip formatter={((v: any, name: any) => (name === 'band' ? ['', ''] : [`${Math.round(v)} bpm`, 'HR'])) as any} />
+                <Area dataKey="band" stroke="none" fill="var(--primary)" fillOpacity={0.12} isAnimationActive={false} />
+                <RLine type="monotone" dataKey="hr" stroke="var(--primary)" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       )}
     </div>

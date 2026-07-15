@@ -160,9 +160,10 @@ def forecast(subject_id: str, samples: list[HRVSample], horizons_s: list[int]) -
     """Real ML forecast. Raises if no trained checkpoint is loaded, or if the
     feature/window requirements aren't met yet — callers should catch and
     fall back to the mock engine."""
-    real_model = model_loader.get_real_model()
+    real_model = model_loader.get_real_model(subject_id)
     if real_model is None:
         raise model_loader.RealModelUnavailable("no trained checkpoint loaded (set HRV_MODEL_DIR)")
+    personalized = subject_id in str(real_model.checkpoint_dir)
 
     from src.models import datasets
 
@@ -226,6 +227,7 @@ def forecast(subject_id: str, samples: list[HRVSample], horizons_s: list[int]) -
         generated_at=datetime.now(timezone.utc),
         model_status="trained",
         model_version=f"hrv_{model_type}_v1",
+        personalized=personalized,
         horizons=horizons,
     )
 

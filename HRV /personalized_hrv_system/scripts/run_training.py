@@ -26,10 +26,14 @@ def main():
     parser.add_argument("--config", default=str(ROOT / "configs" / "config.yaml"))
     parser.add_argument("--out", default=None, help="Output directory for model artifacts")
     parser.add_argument("--ssl-init", default=None, help="SSL-pretrained encoder dir to warm-start a TCN (Tier-3 #18)")
+    parser.add_argument("--raw-root", default=None,
+                         help="Override cfg data.raw_root - e.g. point at Care-Sync real session storage "
+                              "(backend/Users) instead of the demo dataset. --subject can then be "
+                              "'<username>/<session_name>'.")
     args = parser.parse_args()
 
     cfg = yaml.safe_load(open(args.config))
-    raw_root = (ROOT.parent / cfg["data"]["raw_root"]).resolve()
+    raw_root = Path(args.raw_root).resolve() if args.raw_root else (ROOT.parent / cfg["data"]["raw_root"]).resolve()
     subject_dir = raw_root / args.subject
 
     out_dir = Path(args.out) if args.out else ROOT / "models" / args.subject / args.model

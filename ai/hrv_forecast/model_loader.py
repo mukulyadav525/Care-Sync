@@ -1,20 +1,27 @@
 """Attempts to load a real trained checkpoint from the HRV research system;
-falls back to the mock engine when none is available (which is the case
-today — see docs/HRV_INTEGRATION.md).
+falls back to the mock engine when none is available.
 
-To go live with a real model:
+Supports per-user personalization: HRV_MODEL_DIR is treated as a *base*
+directory that can contain:
 
-  1. Train a personal or population model with the pipeline in
-     `HRV /personalized_hrv_system` (e.g. `python scripts/run_pretraining.py`
-     or `python scripts/run_training.py`, see that folder's DESIGN.md).
-  2. Point HRV_MODEL_DIR at the resulting output directory (the one
-     containing meta.joblib, scaler.joblib, and the `*_model.pt` /
-     `xgb/` files written by src/models/train.py).
-  3. Install the extra deps those modules need: torch, joblib, xgboost,
-     scikit-learn (see `HRV /personalized_hrv_system/requirements.txt`).
-  4. Restart the ai/ service. GET /hrv/status will report "trained" once
-     the checkpoint loads successfully; any load error is logged and the
-     service keeps serving the mock engine instead of crashing.
+  HRV_MODEL_DIR/global/              population baseline (all users, until
+                                      they have a personal model)
+  HRV_MODEL_DIR/<subject_id>/         a subject's personally fine-tuned model
+  HRV_MODEL_DIR/meta.joblib (etc.)    back-compat: HRV_MODEL_DIR itself is a
+                                      single flat checkpoint (old behaviour,
+                                      used for every subject)
+
+Resolution order per request: personal dir for this subject_id -> global/ ->
+HRV_MODEL_DIR itself (flat). Each resolved directory is loaded once and
+cached by directory (so many subjects sharing the global model only pay the
+load cost once).
+
+To go live with a real model, see docs/HRV_INTEGRATION.md for the full
+`run_pretraining.py` (global) + `run_finetune.py` (per-user) walkthrough.
+Restart the ai/ service after training; GET /hrv/status?subject_id=<user>
+reports "trained"/"mock" and which checkpoint (personal/global) is serving
+that subject. Any load error is logged and the service keeps serving the
+mock engine instead of crashing.
 """
 from __future__ import annotations
 
@@ -44,6 +51,31 @@ class RealModelUnavailable(Exception):
     """Raised internally when no usable checkpoint/deps are present."""
 
 
+def _is_checkpoint_dir(d: Path) -> bool:
+    return d.is_dir() and (d / "meta.joblib").exists()
+
+
+def _resolve_checkpoint_dir(subject_id: str) -> tuple[Optional[Path], str]:
+    """Returns (path_or_None, source) where source is 'personal', 'global',
+    'flat', or 'none' (explains which tier of the resolution order matched)."""
+    if not DEFAULT_CHECKPOINT_DIR:
+        return None, "none"
+    base = Path(DEFAULT_CHECKPOINT_DIR)
+
+    personal = base / subject_id
+    if _is_checkpoint_dir(personal):
+        return personal, "personal"
+
+    glob = base / "global"
+    if _is_checkpoint_dir(glob):
+        return glob, "global"
+
+    if _is_checkpoint_dir(base):
+        return base, "flat"
+
+    return None, "none"
+
+
 class HRVRealModel:
     """Thin wrapper around HRV/personalized_hrv_system's inference pipeline."""
 
@@ -58,60 +90,57 @@ class HRVRealModel:
         self.model, self.scaler, self.meta = inference_pipeline.load_model(checkpoint_dir)
         self.checkpoint_dir = checkpoint_dir
 
-    # NOTE: run_inference() in the research pipeline expects a fully feature-
-    # engineered pandas table (see src/features/build_features.py), not raw
-    # HRVSample objects. Wiring that feature-engineering step in front of
-    # this call is the remaining step for full production inference and is
-    # intentionally left as a TODO so this loader can ship without pulling
-    # torch/xgboost into the default ai/ install.
     def is_ready(self) -> bool:
         return True
 
 
-_cached_model: Optional[HRVRealModel] = None
-_load_attempted = False
-_load_error: Optional[str] = None
+# Cache keyed by resolved checkpoint directory (str) so multiple subjects
+# sharing the global model reuse one loaded instance.
+_model_cache: dict[str, Optional[HRVRealModel]] = {}
+_load_errors: dict[str, str] = {}
 
 
-def get_real_model() -> Optional[HRVRealModel]:
-    """Returns a loaded HRVRealModel, or None if unavailable. Only tries once
-    per process; the result is cached."""
-    global _cached_model, _load_attempted, _load_error
-
-    if _load_attempted:
-        return _cached_model
-
-    _load_attempted = True
-    if not DEFAULT_CHECKPOINT_DIR:
-        _load_error = "HRV_MODEL_DIR not set"
-        logger.info("HRV real model not loaded: %s", _load_error)
+def get_real_model(subject_id: str = "global") -> Optional[HRVRealModel]:
+    """Returns the best available loaded HRVRealModel for this subject
+    (personal -> global -> flat fallback), or None if nothing usable is
+    configured/loadable. Each resolved directory is only attempted once per
+    process; results are cached by directory."""
+    ckpt_dir, source = _resolve_checkpoint_dir(subject_id)
+    if ckpt_dir is None:
+        if source == "none" and DEFAULT_CHECKPOINT_DIR:
+            _load_errors[subject_id] = f"no checkpoint found for '{subject_id}' under {DEFAULT_CHECKPOINT_DIR}"
         return None
 
-    ckpt_dir = Path(DEFAULT_CHECKPOINT_DIR)
-    if not ckpt_dir.exists():
-        _load_error = f"checkpoint dir does not exist: {ckpt_dir}"
-        logger.warning("HRV real model not loaded: %s", _load_error)
-        return None
+    key = str(ckpt_dir)
+    if key in _model_cache:
+        return _model_cache[key]
 
     try:
-        _cached_model = HRVRealModel(ckpt_dir)
-        logger.info("Loaded real HRV model from %s", ckpt_dir)
+        model = HRVRealModel(ckpt_dir)
+        logger.info("Loaded real HRV model (%s) for subject=%s from %s", source, subject_id, ckpt_dir)
+        _model_cache[key] = model
+        return model
     except Exception as exc:  # noqa: BLE001 - deliberately broad: never take the API down
-        _load_error = str(exc)
-        logger.warning("HRV real model failed to load, falling back to mock: %s", exc)
-        _cached_model = None
+        logger.warning("HRV real model failed to load from %s, falling back to mock: %s", ckpt_dir, exc)
+        _load_errors[key] = str(exc)
+        _model_cache[key] = None
+        return None
 
-    return _cached_model
 
-
-def status() -> dict:
-    model = get_real_model()
+def status(subject_id: str = "global") -> dict:
+    ckpt_dir, source = _resolve_checkpoint_dir(subject_id)
+    model = get_real_model(subject_id)
     return {
         "model_status": "trained" if model is not None else "mock",
-        "checkpoint_dir": DEFAULT_CHECKPOINT_DIR or None,
+        "checkpoint_dir": str(ckpt_dir) if ckpt_dir else (DEFAULT_CHECKPOINT_DIR or None),
+        "personalized": source == "personal" and model is not None,
         "detail": (
-            f"Serving real checkpoint from {model.checkpoint_dir}"
+            f"Serving {source} checkpoint from {model.checkpoint_dir} for subject '{subject_id}'"
             if model is not None
-            else (_load_error or "HRV_MODEL_DIR not set; serving mock_persistence_v1")
+            else (
+                _load_errors.get(str(ckpt_dir)) or _load_errors.get(subject_id)
+                or (f"HRV_MODEL_DIR not set; serving mock_persistence_v1" if not DEFAULT_CHECKPOINT_DIR
+                    else f"no usable checkpoint under {DEFAULT_CHECKPOINT_DIR} for subject '{subject_id}'; serving mock_persistence_v1")
+            )
         ),
     }

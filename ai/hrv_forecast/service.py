@@ -24,12 +24,13 @@ from .schemas import (
 logger = logging.getLogger("ai.hrv_forecast")
 
 
-def get_status() -> HRVStatusResponse:
-    s = model_loader.status()
+def get_status(subject_id: str = "global") -> HRVStatusResponse:
+    s = model_loader.status(subject_id)
     return HRVStatusResponse(
         model_status=s["model_status"],
-        model_version="hrv_personalized_v1" if model_loader.get_real_model() else mock_engine.MODEL_VERSION,
+        model_version="hrv_personalized_v1" if model_loader.get_real_model(subject_id) else mock_engine.MODEL_VERSION,
         checkpoint_dir=s["checkpoint_dir"],
+        personalized=s["personalized"],
         detail=s["detail"],
     )
 

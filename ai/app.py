@@ -11,6 +11,7 @@ from langchain_core.messages import HumanMessage
 from ai import config
 from ai.workflow import graph
 from ai.services.session_memory import get_history
+from ai.rate_limit import RateLimitMiddleware
 
 
 app = FastAPI(
@@ -19,6 +20,10 @@ app = FastAPI(
 )
 app.include_router(trends_router)
 app.include_router(hrv_router)
+# Rate limiting first (innermost concerns run last in Starlette's middleware
+# stack, so adding this after CORS below means CORS headers still get added
+# to 429 responses too).
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     # Localhost + whatever's in CORS_ALLOWED_ORIGINS (set this to your
