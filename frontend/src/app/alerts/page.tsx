@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Bell, Plus, Trash2, ToggleLeft, ToggleRight, History, AlertTriangle, Link as LinkIcon } from 'lucide-react';
+import { Bell, Plus, Trash2, ToggleLeft, ToggleRight, History, AlertTriangle, Link as LinkIcon, HeartPulse, Mail } from 'lucide-react';
 import Link from 'next/link';
 import api from '@/lib/api';
 
@@ -35,11 +35,17 @@ interface FiredHistory {
   actual_mean: number; owner: string; session: string; fired_at: string;
 }
 
+interface HRVAlertHistory {
+  id: number; owner: string; session: string; severity: 'watch' | 'alert';
+  score: number; reasons: string[]; model_status: string; emailed: boolean; created_at: string;
+}
+
 export default function AlertsPage() {
   const router = useRouter();
   const [tab, setTab] = useState<'rules' | 'history'>('rules');
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [history, setHistory] = useState<FiredHistory[]>([]);
+  const [hrvHistory, setHrvHistory] = useState<HRVAlertHistory[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<{ signal: Signal; operator: Operator; threshold: string; label: string }>({
@@ -49,8 +55,8 @@ export default function AlertsPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    Promise.all([api.get('/alerts/'), api.get('/alerts/history/')])
-      .then(([r, h]) => { setRules(r.data.rules); setHistory(h.data.history); setLoading(false); })
+    Promise.all([api.get('/alerts/'), api.get('/alerts/history/'), api.get('/alerts/hrv/history/')])
+      .then(([r, h, hv]) => { setRules(r.data.rules); setHistory(h.data.history); setHrvHistory(hv.data.history); setLoading(false); })
       .catch(() => { router.push('/login'); });
   }, [router]);
 
@@ -111,7 +117,7 @@ export default function AlertsPage() {
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid var(--border)' }}>
-        {([['rules', 'Alert Rules', <Bell size={15} />], ['history', `History${history.length ? ` (${history.length})` : ''}`, <History size={15} />]] as const).map(([key, label, icon]) => (
+        {([['rules', 'Alert Rules', <Bell size={15} />], ['history', `History${(history.length + hrvHistory.length) ? ` (${history.length + hrvHistory.length})` : ''}`, <History size={15} />]] as const).map(([key, label, icon]) => (
           <button key={key} onClick={() => setTab(key)}
             style={{ padding: '0.65rem 1.25rem', border: 'none', background: 'none', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', display: 'flex', alignItems: 'center', gap: '0.4rem', borderBottom: tab === key ? '2px solid var(--primary)' : '2px solid transparent', marginBottom: -2, color: tab === key ? 'var(--primary)' : 'var(--text-muted)' }}>
             {icon}{label}
@@ -122,6 +128,34 @@ export default function AlertsPage() {
       {/* History tab */}
       {tab === 'history' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          {hrvHistory.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.5rem' }}>
+              <p style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                HRV / anomaly alerts
+              </p>
+              {hrvHistory.map((h) => (
+                <div key={`hrv-${h.id}`} className="glass-panel" style={{
+                  padding: '1rem 1.25rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap',
+                  border: h.severity === 'alert' ? '1px solid var(--error)' : undefined,
+                }}>
+                  <HeartPulse size={16} color={h.severity === 'alert' ? 'var(--error)' : '#f59e0b'} style={{ flexShrink: 0 }} />
+                  <div style={{ flex: 1 }}>
+                    <p style={{ fontWeight: 600, fontSize: '0.9rem' }}>
+                      {h.severity === 'alert' ? 'Alert' : 'Worth watching'} · score {h.score.toFixed(2)}
+                      {h.emailed && <span style={{ marginLeft: '0.5rem', color: 'var(--text-muted)', fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.78rem' }}><Mail size={12} /> emailed</span>}
+                    </p>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                      {h.reasons.join(', ')} &nbsp;·&nbsp; {new Date(h.created_at).toLocaleString()}
+                    </p>
+                  </div>
+                  <Link href={`/portal/${encodeURIComponent(h.owner)}/${encodeURIComponent(h.session)}`}
+                    style={{ fontSize: '0.8rem', color: 'var(--primary)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                    {h.session} →
+                  </Link>
+                </div>
+              ))}
+            </div>
+          )}
           {history.length > 0 && (
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
               <button onClick={clearHistory} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
@@ -129,10 +163,10 @@ export default function AlertsPage() {
               </button>
             </div>
           )}
-          {history.length === 0 ? (
+          {history.length === 0 && hrvHistory.length === 0 ? (
             <div className="glass-panel" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
               <History size={36} style={{ marginBottom: '1rem', opacity: 0.25 }} />
-              <p>No alerts have fired yet. Open a session that breaches a rule to see history here.</p>
+              <p>No alerts have fired yet. Open a session that breaches a rule, or shows an unusual HRV pattern, to see history here.</p>
             </div>
           ) : (
             history.map((h) => (

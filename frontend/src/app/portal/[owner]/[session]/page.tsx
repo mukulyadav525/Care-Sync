@@ -249,7 +249,7 @@ export default function SessionDashboard() {
       )}
 
       {/* HRV forecast / anomaly / digital twin (ai/ service) */}
-      <HRVInsights signals={data.signals} />
+      <HRVInsights signals={data.signals} owner={owner} session={session} />
 
       {/* Signal panels */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 480px), 1fr))', gap: '1.5rem' }}>

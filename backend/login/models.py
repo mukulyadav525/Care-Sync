@@ -141,6 +141,33 @@ class UploadedDocument(models.Model):
         return f"UploadedDocument({self.user.username}/{self.filename}: {self.doc_type})"
 
 
+class HRVAnomalyAlert(models.Model):
+    """A fired anomaly/digital-twin deviation from the ai/ HRV pipeline
+    (distinct from the simple threshold AlertRule system above — these come
+    from /hrv/anomaly's combined score + reasons, not a single-signal
+    threshold). 'alert' severity triggers an email to the user; 'watch'
+    severity is shown in-app only.
+    """
+    SEVERITY_CHOICES = [('watch', 'Watch'), ('alert', 'Alert')]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='hrv_alerts')
+    owner = models.CharField(max_length=150)
+    session = models.CharField(max_length=200)
+    severity = models.CharField(max_length=10, choices=SEVERITY_CHOICES)
+    score = models.FloatField()
+    reasons = models.TextField(blank=True)
+    model_status = models.CharField(max_length=20, blank=True)
+    emailed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['user', '-created_at'])]
+
+    def __str__(self):
+        return f"HRVAnomalyAlert({self.owner}/{self.session}: {self.severity} @ {self.created_at:%Y-%m-%d %H:%M})"
+
+
 class ContactMessage(models.Model):
     """Message submitted through the contact form."""
     name = models.CharField(max_length=100)

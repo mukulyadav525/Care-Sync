@@ -81,8 +81,8 @@ export default function Navbar() {
           <TrendingUp size={18} /> Trends
         </Link>
         {isAdmin && (
-          <Link href="/admin/patients" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: pathname.startsWith('/admin') ? 'var(--primary-color)' : 'var(--text-primary)', fontWeight: 600 }}>
-            <Users size={18} /> Patients
+          <Link href="/admin/overview" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: pathname.startsWith('/admin') ? 'var(--primary-color)' : 'var(--text-primary)', fontWeight: 600 }}>
+            <Users size={18} /> Admin
           </Link>
         )}
         <Link href="/files" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: pathname.startsWith('/files') ? 'var(--primary-color)' : 'var(--text-primary)', fontWeight: 600 }}>

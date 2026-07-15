@@ -11,12 +11,26 @@ Endpoints:
   PATCH /api/alerts/<pk>/     update (enable/disable/change threshold)
   DELETE /api/alerts/<pk>/    delete
 """
+import logging
+from datetime import timedelta
+
+from django.conf import settings
+from django.core.mail import send_mail
+from django.utils import timezone
+
 from rest_framework import status as drf_status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from login.models import AlertRule, AlertFired
+from login.models import AlertRule, AlertFired, HRVAnomalyAlert
+
+logger = logging.getLogger(__name__)
+
+# Don't re-email/re-log the same owner+session+severity more often than this —
+# the frontend polls /hrv/anomaly periodically, and without this a sustained
+# anomaly would otherwise fire a fresh email every poll.
+HRV_ALERT_DEDUP_WINDOW = timedelta(minutes=30)
 
 
 VALID_SIGNALS = {c[0] for c in AlertRule.SIGNAL_CHOICES}
@@ -172,3 +186,106 @@ def persist_fired_alerts(user, fired: list[dict], owner: str, session: str):
     ]
     if to_create:
         AlertFired.objects.bulk_create(to_create)
+
+
+# ---------------------------------------------------------------------------
+# HRV pipeline anomaly alerts (from ai/ /hrv/anomaly — combined score +
+# free-text reasons, not a single-signal threshold rule).
+# ---------------------------------------------------------------------------
+
+def _send_hrv_alert_email(user, owner: str, session: str, score: float, reasons: list[str]) -> bool:
+    if not user.email:
+        logger.info("HRV alert for %s has no registered email, skipping.", user.username)
+        return False
+    try:
+        send_mail(
+            subject=f'Care-Sync alert: unusual vitals detected ({owner}/{session})',
+            message=(
+                f"Care-Sync's HRV monitoring flagged unusual vitals for session '{session}'.\n\n"
+                f"Anomaly score: {score:.2f}\n\n"
+                + "\n".join(f"- {r}" for r in reasons) +
+                "\n\nThis is an automated alert. If this is expected (e.g. exercise), no action is needed. "
+                "Open Care-Sync to review the session in detail."
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+        return True
+    except Exception as e:
+        logger.error("Failed to send HRV alert email to %s: %s", user.username, e)
+        return False
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def report_hrv_anomaly(request):
+    """
+    POST /api/alerts/hrv/
+    Body: { owner, session, severity: 'watch'|'alert', score, reasons: [...] , model_status }
+
+    Called by the frontend whenever /hrv/anomaly (ai service) returns a
+    non-normal severity. Persists it for the admin/user alert history and,
+    for 'alert' severity, emails the registered user — deduplicated so a
+    sustained anomaly doesn't spam an email per poll.
+    """
+    owner = str(request.data.get('owner', '')).strip()
+    session = str(request.data.get('session', '')).strip()
+    severity = request.data.get('severity')
+    reasons = request.data.get('reasons') or []
+    model_status = str(request.data.get('model_status', ''))[:20]
+
+    if severity not in ('watch', 'alert'):
+        return Response({'error': "severity must be 'watch' or 'alert'"}, status=400)
+    if not owner or not session:
+        return Response({'error': 'owner and session are required'}, status=400)
+    try:
+        score = float(request.data.get('score'))
+    except (TypeError, ValueError):
+        return Response({'error': 'score must be a number'}, status=400)
+    if not isinstance(reasons, list):
+        reasons = [str(reasons)]
+
+    cutoff = timezone.now() - HRV_ALERT_DEDUP_WINDOW
+    recent = HRVAnomalyAlert.objects.filter(
+        user=request.user, owner=owner, session=session, severity=severity, created_at__gte=cutoff,
+    ).first()
+    if recent:
+        return Response({'deduped': True, 'id': recent.id, 'emailed': recent.emailed})
+
+    record = HRVAnomalyAlert.objects.create(
+        user=request.user, owner=owner, session=session, severity=severity,
+        score=score, reasons='\n'.join(str(r) for r in reasons), model_status=model_status,
+    )
+
+    emailed = False
+    if severity == 'alert':
+        emailed = _send_hrv_alert_email(request.user, owner, session, score, reasons)
+        if emailed:
+            record.emailed = True
+            record.save(update_fields=['emailed'])
+
+    return Response({'deduped': False, 'id': record.id, 'emailed': emailed}, status=201)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def hrv_alert_history(request):
+    """GET /api/alerts/hrv/history/ — last 50 HRV anomaly alerts for the user
+    (all users' for superusers, used by the admin overview page)."""
+    qs = HRVAnomalyAlert.objects.all() if request.user.is_superuser else HRVAnomalyAlert.objects.filter(user=request.user)
+    qs = qs[:50]
+    return Response({'history': [
+        {
+            'id': a.id,
+            'owner': a.owner,
+            'session': a.session,
+            'severity': a.severity,
+            'score': a.score,
+            'reasons': a.reasons.split('\n') if a.reasons else [],
+            'model_status': a.model_status,
+            'emailed': a.emailed,
+            'created_at': a.created_at.isoformat(),
+        }
+        for a in qs
+    ]})

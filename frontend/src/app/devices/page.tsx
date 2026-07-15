@@ -100,6 +100,11 @@ export default function DevicesPage() {
   const deviceRef = useRef<any>(null);
   const samplesRef = useRef<BleSample[]>([]);
 
+  /* ── Simulated device (demo mode — no real hardware needed) ── */
+  const [simulating, setSimulating] = useState(false);
+  const simIntervalRef = useRef<any>(null);
+  const simTickRef = useRef(0);
+
   const isBleSupported = typeof navigator !== 'undefined' && 'bluetooth' in navigator;
 
   /* ── Load registered devices ── */
@@ -188,6 +193,55 @@ export default function DevicesPage() {
     setBleStatus('idle'); addBleLog('Disconnected.');
     localStorage.removeItem(BLE_STORAGE_KEY);
   };
+
+  /* ── Simulate a device with synthetic vitals (no hardware required) ──
+     Useful while real hardware is still in development: generates a
+     realistic-looking HR/EDA/TEMP/ACC stream, including a deliberate
+     "spike" partway through each loop so the anomaly/alert pipeline has
+     something real to detect and demo end-to-end. Writes to the exact
+     same BLE_STORAGE_KEY the real Bluetooth path uses, so the dashboard's
+     live strip and this page's tiles behave identically either way. */
+  const startSimulation = () => {
+    if (simIntervalRef.current) return;
+    setSimulating(true);
+    setBleStatus('connected');
+    setBleName('Simulated Watch (Demo Mode)');
+    addBleLog('Started demo simulation — synthetic data, no real device connected.');
+    simTickRef.current = 0;
+
+    simIntervalRef.current = setInterval(() => {
+      const t = simTickRef.current++;
+      const loopPos = t % 90;
+      const spike = loopPos > 40 && loopPos < 58; // ~18s simulated "event" each 90s loop
+
+      const hr = 68 + 4 * Math.sin(t / 12) + (Math.random() - 0.5) * 3 + (spike ? 34 : 0);
+      const eda = 1.8 + (Math.random() - 0.5) * 0.3 + (spike ? 1.3 : 0);
+      const temp = 36.5 + (Math.random() - 0.5) * 0.1 + (spike ? 0.7 : 0);
+      const acc = 0.05 + Math.random() * 0.05 + (spike ? 0.35 : 0);
+
+      const parsed = {
+        HR: Math.round(hr * 10) / 10,
+        EDA: Math.round(eda * 100) / 100,
+        TEMP: Math.round(temp * 10) / 10,
+        ACC: Math.round(acc * 100) / 100,
+      };
+      const sample: BleSample = { t: Date.now(), ...parsed };
+      samplesRef.current = [...samplesRef.current.slice(-(MAX_LIVE_POINTS - 1)), sample];
+      setBleSamples([...samplesRef.current]);
+      setBleLatest(parsed);
+      localStorage.setItem(BLE_STORAGE_KEY, JSON.stringify({ ...parsed, t: Date.now() }));
+    }, 1000);
+  };
+
+  const stopSimulation = () => {
+    if (simIntervalRef.current) { clearInterval(simIntervalRef.current); simIntervalRef.current = null; }
+    setSimulating(false);
+    setBleStatus('idle');
+    addBleLog('Stopped simulation.');
+    localStorage.removeItem(BLE_STORAGE_KEY);
+  };
+
+  useEffect(() => () => { if (simIntervalRef.current) clearInterval(simIntervalRef.current); }, []);
 
   const handleBleExport = () => {
     if (!bleSamples.length) return;
@@ -362,14 +416,22 @@ export default function DevicesPage() {
                 <p style={{ fontWeight: 600 }}>
                   {bleStatus === 'idle' ? 'Not connected' : bleStatus === 'connecting' ? 'Connecting…' : bleStatus === 'error' ? 'Connection failed' : `Connected — ${bleName}`}
                 </p>
-                {bleStatus === 'connected' && <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{bleSamples.length} samples</p>}
+                {bleStatus === 'connected' && <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{bleSamples.length} samples{simulating ? ' · simulated' : ''}</p>}
               </div>
             </div>
             <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap' }}>
-              {bleStatus !== 'connected'
-                ? <button onClick={handleBleConnect} className="btn btn-primary" disabled={bleStatus === 'connecting' || !isBleSupported}>Connect Device</button>
-                : <button onClick={handleBleDisconnect} className="btn btn-outline" style={{ color: 'var(--error)', borderColor: 'var(--error)' }}>Disconnect</button>
-              }
+              {bleStatus !== 'connected' ? (
+                <>
+                  <button onClick={handleBleConnect} className="btn btn-primary" disabled={bleStatus === 'connecting' || !isBleSupported}>Connect Device</button>
+                  <button onClick={startSimulation} className="btn btn-outline" title="No hardware yet? Stream synthetic vitals to try the full pipeline.">
+                    Simulate Device (Demo)
+                  </button>
+                </>
+              ) : simulating ? (
+                <button onClick={stopSimulation} className="btn btn-outline" style={{ color: 'var(--error)', borderColor: 'var(--error)' }}>Stop Simulation</button>
+              ) : (
+                <button onClick={handleBleDisconnect} className="btn btn-outline" style={{ color: 'var(--error)', borderColor: 'var(--error)' }}>Disconnect</button>
+              )}
               {bleSamples.length > 0 && (
                 <button onClick={handleBleExport} className="btn btn-outline" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                   <Download size={14} /> Export CSV
@@ -377,6 +439,12 @@ export default function DevicesPage() {
               )}
             </div>
           </div>
+
+          {!isBleSupported && !simulating && bleStatus === 'idle' && (
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '-1rem' }}>
+              Web Bluetooth isn't supported in this browser (use Chrome/Edge for real hardware) — "Simulate Device" works everywhere and doesn't need it.
+            </p>
+          )}
 
           {/* Live metric tiles */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '1rem' }}>

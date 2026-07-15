@@ -116,6 +116,8 @@ alert_urls = [
     path('', alert_views.alert_list, name='api-alerts'),
     path('history/', alert_views.alert_history, name='api-alert-history'),
     path('history/clear/', alert_views.clear_alert_history, name='api-alert-history-clear'),
+    path('hrv/', alert_views.report_hrv_anomaly, name='api-alert-hrv'),
+    path('hrv/history/', alert_views.hrv_alert_history, name='api-alert-hrv-history'),
     path('<int:pk>/', alert_views.alert_detail, name='api-alert-detail'),
 ]
 
@@ -130,6 +132,7 @@ urlpatterns = [
     path('api/profile/', pages_views.profile, name='api-profile'),
     path('api/contact/', pages_views.contact_view, name='api-contact'),
     path('api/admin/patients/', pages_views.admin_patients, name='api-admin-patients'),
+    path('api/admin/overview/', pages_views.admin_overview, name='api-admin-overview'),
     path('api/auth/', include(auth_urls)),
     path('api/files/', include(file_urls)),
     path('api/visualization/', include(viz_urls)),

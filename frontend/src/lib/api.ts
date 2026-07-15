@@ -5,6 +5,10 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  // Without this, a stalled backend/network hangs the request (and whatever
+  // loading spinner is waiting on it) indefinitely instead of failing with
+  // a clear, actionable error.
+  timeout: 15000,
 });
 
 // Add a request interceptor to attach JWT token

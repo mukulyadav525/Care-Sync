@@ -21,6 +21,12 @@ function fmtDuration(sec: number): string {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
+function fetchWithTimeout(url: string, init?: RequestInit, ms = 8000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 export default function Dashboard() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
@@ -72,9 +78,11 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, []);
 
-  // Fetch sample graph data from the AI pipeline service (best-effort; service is optional)
+  // Fetch sample graph data from the AI pipeline service (best-effort; service is optional).
+  // Timeouts throughout this file guard against a stalled/unreachable ai/
+  // service hanging the page instead of failing fast.
   useEffect(() => {
-    fetch(`${AI_API_URL}/graph-data`)
+    fetchWithTimeout(`${AI_API_URL}/graph-data`)
       .then((res) => res.json())
       .then(setGraphData)
       .catch(() => setGraphData([]));
@@ -82,7 +90,7 @@ export default function Dashboard() {
 
   // Weekly heart-rate/stress trend, bucketed by day/hour (best-effort; service is optional)
   useEffect(() => {
-    fetch(`${AI_API_URL}/trends`)
+    fetchWithTimeout(`${AI_API_URL}/trends`)
       .then((res) => res.json())
       .then((data) => setWeeklyTrends({ heart_rate: data.heart_rate ?? [], stress: data.stress ?? [] }))
       .catch(() => setWeeklyTrends({ heart_rate: [], stress: [] }));
@@ -91,17 +99,17 @@ export default function Dashboard() {
   const runAIAnalysis = async () => {
     setLoadingAI(true);
     try {
-      const res = await fetch(`${AI_API_URL}/chat`, {
+      const res = await fetchWithTimeout(`${AI_API_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: 'Analyze latest PPG signal', session_id: aiSessionId.current }),
-      });
+      }, 20000); // chat can be slower (LLM call), give it more room than the passive widgets
       const text = await res.text();
       if (!res.ok) throw new Error(text);
       setAiResult(JSON.parse(text));
-    } catch (err) {
+    } catch (err: any) {
       console.error('AI ERROR:', err);
-      alert(String(err));
+      alert(err?.name === 'AbortError' ? 'AI analysis timed out — the AI service may be unavailable.' : String(err));
     } finally {
       setLoadingAI(false);
     }

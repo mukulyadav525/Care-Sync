@@ -48,6 +48,11 @@ class HorizonForecast(BaseModel):
     rmssd_pred: Optional[float] = None
     rmssd_lower: Optional[float] = None
     rmssd_upper: Optional[float] = None
+    # Only populated when the caller sent temp/eda samples — persistence
+    # forecast in mock mode, multi-task model output once predict_vitals is
+    # enabled on a trained checkpoint (see HRV DESIGN.md model.predict_vitals).
+    temp_pred: Optional[float] = None
+    eda_pred: Optional[float] = None
 
 
 class ForecastResponse(BaseModel):

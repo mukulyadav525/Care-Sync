@@ -32,6 +32,10 @@ def _rmssd_series(samples: list[HRVSample]) -> list[float]:
     return [s.rmssd for s in samples if s.rmssd is not None]
 
 
+def _vital_series(samples: list[HRVSample], attr: str) -> list[float]:
+    return [getattr(s, attr) for s in samples if getattr(s, attr) is not None]
+
+
 def forecast(subject_id: str, samples: list[HRVSample], horizons_s: list[int]) -> ForecastResponse:
     hr = _hr_series(samples)
     last_hr = hr[-1]
@@ -41,6 +45,14 @@ def forecast(subject_id: str, samples: list[HRVSample], horizons_s: list[int]) -
     rmssd_vals = _rmssd_series(samples)
     last_rmssd = rmssd_vals[-1] if rmssd_vals else None
     rmssd_std = statistics.pstdev(rmssd_vals) if len(rmssd_vals) > 1 else (max(1.0, last_rmssd * 0.1) if last_rmssd else None)
+
+    # TEMP/EDA: simple last-value persistence (no interval — these are
+    # secondary vitals, shown as a point estimate only). Only populated when
+    # the caller actually sent temp/eda samples.
+    temp_vals = _vital_series(samples, "temp")
+    last_temp = temp_vals[-1] if temp_vals else None
+    eda_vals = _vital_series(samples, "eda")
+    last_eda = eda_vals[-1] if eda_vals else None
 
     horizons = []
     for h in sorted(horizons_s):
@@ -56,6 +68,8 @@ def forecast(subject_id: str, samples: list[HRVSample], horizons_s: list[int]) -
                 rmssd_pred=round(last_rmssd, 2) if last_rmssd is not None else None,
                 rmssd_lower=round(last_rmssd - 1.96 * rmssd_std, 2) if last_rmssd is not None else None,
                 rmssd_upper=round(last_rmssd + 1.96 * rmssd_std, 2) if last_rmssd is not None else None,
+                temp_pred=round(last_temp, 2) if last_temp is not None else None,
+                eda_pred=round(last_eda, 3) if last_eda is not None else None,
             )
         )
 

@@ -1,10 +1,15 @@
 # AI agentic pipeline service (FastAPI, standalone from the Django backend)
+#
+# numpy/pandas/scipy are left unpinned (just a floor version) because their
+# exact-pin releases require a very recent Python (3.12+). Pinning them tight
+# broke installs on servers with older Python — pip will pick the newest
+# version that's actually compatible with whatever Python is running this.
 fastapi==0.139.0
 uvicorn==0.49.0
 pydantic==2.13.4
-numpy==2.5.0
-pandas==3.0.3
-scipy==1.18.0
+numpy>=1.24
+pandas>=2.0
+scipy>=1.10
 python-dotenv==1.2.2
 langchain-core==1.4.9
 langgraph==1.2.7
