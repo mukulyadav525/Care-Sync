@@ -9,7 +9,7 @@
   # backend/deploy/cloudflare-tunnel.yml or Caddyfile/nginx.conf for the
   # ai.yourdomain.com block. Falls back to http://127.0.0.1:8001 in code if
   # unset, which is only useful for local dev.
-  NEXT_PUBLIC_AI_API_URL = "https://REPLACE-WITH-YOUR-AI-SERVICE-URL"
+  NEXT_PUBLIC_AI_API_URL = "https://marble-disclose-solely-software.trycloudflare.com"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
