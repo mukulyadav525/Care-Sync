@@ -73,10 +73,13 @@ def _samples_to_synced(samples: list[HRVSample], subject_id: str, cfg: dict) -> 
     ).sort_index()
     raw = raw[~raw.index.duplicated(keep="last")]
 
-    grid = pd.DataFrame(index=raw.index)
-    grid["HR"] = raw["HR"].resample(freq).mean()
-    grid = grid.reindex(pd.date_range(grid.index.min(), grid.index.max(), freq=freq))
-    grid["HR"] = grid["HR"].interpolate(limit=5).ffill().bfill()
+    # Resample first, then build the grid on the resampled (bin-aligned) index.
+    # Building the grid on raw.index and assigning the resampled series into it
+    # silently produced an all-NaN HR column whenever callers sent sub-second
+    # timestamps (the raw index labels never matched the 1s bin labels).
+    hr = raw["HR"].resample(freq).mean()
+    grid = pd.DataFrame(index=pd.date_range(hr.index.min(), hr.index.max(), freq=freq))
+    grid["HR"] = hr.reindex(grid.index).interpolate(limit=5).ffill().bfill()
 
     for col in ("TEMP", "EDA"):
         if raw[col].notna().any():

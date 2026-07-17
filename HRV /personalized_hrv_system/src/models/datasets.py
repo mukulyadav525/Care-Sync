@@ -84,13 +84,9 @@ def apply_target_scaler(y: np.ndarray, scaler: StandardScaler) -> np.ndarray:
     return scaler.transform(y).astype(np.float32)
 
 
-def inverse_target_scaler(y_scaled: np.ndarray, scaler: StandardScaler) -> tuple[np.ndarray, np.ndarray]:
-    """Inverse-transform predicted mean and propagate scale to std.
-
-    Returns (mean_raw, std_raw) both in the original target units.
-    """
-    mean_raw = scaler.inverse_transform(y_scaled)
-    return mean_raw
+def inverse_target_scaler(y_scaled: np.ndarray, scaler: StandardScaler) -> np.ndarray:
+    """Inverse-transform predicted means back to the original target units."""
+    return scaler.inverse_transform(y_scaled)
 
 
 def inverse_target_std(y_std_scaled: np.ndarray, scaler: StandardScaler) -> np.ndarray:

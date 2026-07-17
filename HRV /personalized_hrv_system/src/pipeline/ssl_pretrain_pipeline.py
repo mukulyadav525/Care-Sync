@@ -103,7 +103,7 @@ def load_ssl_encoder(forecaster, ssl_dir: Path | str) -> int:
     Returns the number of parameter tensors successfully loaded."""
     import torch  # noqa: PLC0415
     ssl_dir = Path(ssl_dir)
-    state = torch.load(ssl_dir / "ssl_encoder.pt", map_location="cpu")
+    state = torch.load(ssl_dir / "ssl_encoder.pt", map_location="cpu", weights_only=True)
     own = forecaster.tcn.state_dict()
     matched = {k: v for k, v in state.items() if k in own and own[k].shape == v.shape}
     own.update(matched)

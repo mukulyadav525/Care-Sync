@@ -5,8 +5,21 @@ import os
 from pathlib import Path
 from datetime import timedelta
 
+from dotenv import load_dotenv
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load backend/.env into the process environment ourselves — don't rely on
+# whatever's launching this (systemd's EnvironmentFile=, a manually-exported
+# shell, etc.) to have done it already. Without this, running gunicorn/
+# manage.py by hand in a fresh shell silently ignores everything in .env
+# (DEBUG, ALLOWED_HOSTS, DJANGO_SECRET_KEY, ...) with no error — it just
+# falls back to defaults, which is exactly the kind of "why is ALLOWED_HOSTS
+# not taking effect" confusion this fixes. load_dotenv() is a no-op if the
+# vars are already set in the environment (e.g. by systemd), so this is safe
+# either way.
+load_dotenv(BASE_DIR / '.env')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # Defaults to False (fail closed) — DEBUG must be explicitly opted into for

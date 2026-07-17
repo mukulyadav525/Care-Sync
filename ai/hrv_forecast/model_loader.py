@@ -139,7 +139,7 @@ def status(subject_id: str = "global") -> dict:
             if model is not None
             else (
                 _load_errors.get(str(ckpt_dir)) or _load_errors.get(subject_id)
-                or (f"HRV_MODEL_DIR not set; serving mock_persistence_v1" if not DEFAULT_CHECKPOINT_DIR
+                or ("HRV_MODEL_DIR not set; serving mock_persistence_v1" if not DEFAULT_CHECKPOINT_DIR
                     else f"no usable checkpoint under {DEFAULT_CHECKPOINT_DIR} for subject '{subject_id}'; serving mock_persistence_v1")
             )
         ),

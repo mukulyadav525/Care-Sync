@@ -3,6 +3,7 @@
 # pins here (and in ai/requirements.txt) assumed Python 3.12+ and failed
 # outright on older servers. pip will pick the newest version compatible
 # with whatever Python is running this.
+python-dotenv>=1.0
 Django>=4.2,<6.0
 djangorestframework>=3.14
 djangorestframework-simplejwt>=5.3

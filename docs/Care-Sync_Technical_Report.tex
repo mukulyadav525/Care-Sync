@@ -1,0 +1,930 @@
+%=======================================================================
+%  Care-Sync / M-Health : Full Technical Report
+%  Personalized Physiological Forecasting & Anomaly Detection Platform
+%
+%  Compile with:  pdflatex Care-Sync_Technical_Report.tex   (run twice for ToC)
+%=======================================================================
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{titlesec}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{codebg}{RGB}{245,247,249}
+\definecolor{codekw}{RGB}{0,102,153}
+\definecolor{codecm}{RGB}{110,120,130}
+\definecolor{codest}{RGB}{170,55,55}
+\definecolor{emerald}{RGB}{4,120,87}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  keywordstyle=\color{codekw}\bfseries,
+  commentstyle=\color{codecm}\itshape,
+  stringstyle=\color{codest},
+  breaklines=true,
+  showstringspaces=false,
+  frame=single,
+  rulecolor=\color{gray!40},
+  columns=fullflexible,
+  language=Python,
+  numbers=none,
+  aboveskip=8pt,belowskip=8pt
+}
+
+% inline code helper that tolerates underscores
+\newcommand{\code}[1]{\lstinline[basicstyle=\ttfamily\normalsize]!#1!}
+
+\titleformat{\section}{\Large\bfseries\color{emerald}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.6em}{}
+
+\title{\textbf{Care-Sync / M-Health}\\[4pt]
+\large A Privacy-First Platform for Personalized Physiological Forecasting\\
+and Explainable Anomaly Detection\\[6pt]
+\normalsize Full Technical Report --- Data Pipeline, Feature Engineering,\\
+Models, Anomaly Layer, and System Architecture}
+\author{Care-Sync Engineering}
+\date{\today}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+\noindent
+Care-Sync is an end-to-end platform that ingests wearable physiological signals
+(Empatica~E4: PPG/BVP, HR, inter-beat intervals, accelerometry, electrodermal
+activity, and skin temperature), learns what is \emph{normal for a specific
+individual}, forecasts their heart rate and heart-rate variability (HRV) one,
+five, and ten minutes ahead, and raises \emph{explainable} health-drift alerts
+when the measured signal deviates from that personal baseline. This report
+documents every step of the working system: how raw device files are read,
+synchronized, filtered, and cleaned; how each feature is extracted (with exact
+formulas and windowing); how sequence windows and forecast targets are
+constructed; the forecasting models (TCN, LSTM, GRU, Transformer, XGBoost) and
+their heteroscedastic $\beta$-NLL training; the personalization stack (global
+pretraining, per-user fine-tuning, self-supervised warm-start, online updates,
+and the digital twin); the multi-channel anomaly detector (adaptive z-scores,
+Kalman innovation, CUSUM drift, illness composite, signal-quality gating, and
+hysteresis alerting); and the surrounding platform (FastAPI AI service, Django
+REST backend, and Next.js frontend).
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%=======================================================================
+\section{System Overview}
+%=======================================================================
+
+Care-Sync is organized into four cooperating layers plus a device-side helper,
+each in its own top-level directory of the repository.
+
+\begin{longtable}{@{}p{0.20\textwidth}p{0.14\textwidth}p{0.58\textwidth}@{}}
+\toprule
+\textbf{Layer} & \textbf{Stack} & \textbf{Responsibility} \\
+\midrule
+\endhead
+\code{frontend/} & Next.js 16, React 19, TypeScript & Web UI: login, dashboard,
+files, PPG visualization, the device \emph{Signal Portal}, trends, alerts,
+consent, admin. Talks to the backend over \code{/api}. \\
+\code{backend/} & Django 6, DRF, SimpleJWT & REST API: authentication (email
+OTP + JWT), file management, signal visualization, HL7 export, device registry,
+portal aggregation, alert rules, HRV anomaly records, consent. \\
+\code{ai/} & FastAPI, LangGraph, PyTorch & Agentic analysis + the HRV
+forecast/anomaly/digital-twin service. Wraps the research pipeline behind a
+stable HTTP contract with a deterministic mock fallback. \\
+\code{HRV\ /personalized\_hrv\_system/} & Python, NumPy, pandas, SciPy, PyTorch,
+XGBoost & The research pipeline: cleaning, feature engineering, models,
+training, personalization, anomaly scoring, simulation, evaluation. \\
+\code{device-ingestion/} & stdlib Python & Device heartbeat helper that posts
+battery/firmware/session status to the backend device API. \\
+\bottomrule
+\end{longtable}
+
+\subsection{End-to-end data flow}
+
+The physiological data path, from sensor to alert, is:
+
+\begin{enumerate}[leftmargin=1.4em,itemsep=2pt]
+\item \textbf{Ingest} raw per-signal files, each carrying its own start time and
+      sample rate in a header (Section~\ref{sec:ingest}).
+\item \textbf{Synchronize} every signal onto a common 1\,Hz grid, aggregating
+      fast signals per second (Section~\ref{sec:sync}).
+\item \textbf{Clean} each modality with signal-appropriate filters, artifact
+      rejection, and gap handling (Section~\ref{sec:clean}).
+\item \textbf{Engineer features}: rolling HR/HRV statistics, activity, circadian
+      baseline, physiological state, recovery, subject-relative baselines, and
+      long-context summaries (Section~\ref{sec:features}).
+\item \textbf{Window} the feature table into input sequences with multi-horizon
+      forecast targets (Section~\ref{sec:windows}).
+\item \textbf{Forecast} HR (and RMSSD) at $+60$, $+300$, $+600$\,s with a
+      predicted mean \emph{and} uncertainty (Section~\ref{sec:models}).
+\item \textbf{Personalize}: bootstrap from a population model, fine-tune per
+      user, and keep adapting online; summarize the person as a digital twin
+      (Section~\ref{sec:personal}).
+\item \textbf{Detect anomalies} by comparing actual vs.\ forecast through a
+      multi-channel, quality-gated, context-aware scorer, and raise explainable
+      alerts (Section~\ref{sec:anomaly}).
+\item \textbf{Serve} all of this over HTTP and surface it in the portal
+      (Sections~\ref{sec:aiservice}--\ref{sec:frontend}).
+\end{enumerate}
+
+A central design principle is \textbf{causality}: every feature and every
+baseline is computed using only past and current samples (rolling windows,
+expanding means with a one-step shift, EWMA trackers), so the exact same code
+that trains offline can run in real time on a streaming device.
+
+%=======================================================================
+\section{Data Ingestion}\label{sec:ingest}
+%=======================================================================
+
+Raw data follows the Empatica~E4 export format. Each session is a folder
+(\code{backend/Users/<user>/<session>/} in production, or
+\code{Dataset3/Raw\_data/SXX/} in research) containing one file per signal.
+Readers live in \code{src/data/loader.py}.
+
+\begin{longtable}{@{}llp{0.52\textwidth}@{}}
+\toprule
+\textbf{File} & \textbf{Native rate} & \textbf{Format} \\
+\midrule
+\endhead
+\code{HR.csv} & $\sim$1\,Hz & row1 = Unix start ts (UTC), row2 = Hz, then values. \\
+\code{EDA.csv} & 4\,Hz & same 2-row header, electrodermal activity ($\mu$S). \\
+\code{TEMP.csv} & 4\,Hz & same header, skin temperature ($^\circ$C). \\
+\code{BVP.csv} & 64\,Hz & same header, raw blood-volume-pulse (PPG) waveform. \\
+\code{ACC.csv} & 32\,Hz & row1 = start ts $\times3$, row2 = Hz $\times3$, then
+$x,y,z$ in units of $1/64\,g$ (converted to $g$ on read). \\
+\code{IBI.csv} & irregular & row0 = \texttt{start\_ts, IBI}; then
+$(\text{offset}_s, \text{ibi}_s)$ pairs --- inter-beat intervals, no fixed Hz. \\
+\code{tags*.csv} & --- & one Unix timestamp per line (event/button markers). \\
+\code{info.txt} & --- & metadata, shown verbatim. \\
+\bottomrule
+\end{longtable}
+
+Each reader parses the header to build a UTC \code{DatetimeIndex} from the start
+timestamp and sample rate:
+\[
+t_i = t_{\text{start}} + \frac{i}{f_s},\qquad i = 0,1,\dots,N-1 .
+\]
+The ACC reader divides raw counts by 64 to obtain $g$. The IBI reader places
+each beat at $t_{\text{start}}+\text{offset}_s$, producing an irregularly-sampled
+series. All reads are wrapped by \code{\_safe\_read}: a missing or malformed file
+yields an empty Series/DataFrame plus a warning, so the pipeline degrades
+gracefully to partial data instead of crashing. The loader also auto-resolves
+both flat (\code{SXX/HR.csv}) and nested (\code{<SID>\_E4\_Data/HR.csv}) layouts.
+
+%=======================================================================
+\section{Synchronization and Resampling}\label{sec:sync}
+%=======================================================================
+
+\code{src/data/sync.py::build\_synced\_frame} aligns all modalities onto a common
+1\,Hz grid (\code{cfg.resample.freq = "1s"}). 1\,Hz is chosen because HR is
+natively $\sim$1\,Hz, it is fine enough for minute-scale forecasting, and it is
+cheap enough for on-device streaming. Per-signal handling:
+
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+\item \textbf{HR}: clipped to a plausible range, then \code{resample("1s").mean()}
+      to absorb tiny timestamp drift.
+\item \textbf{ACC (32\,Hz)}: gravity removed (Section~\ref{sec:clean}), then the
+      per-axis magnitude
+      $\lVert a \rVert = \sqrt{a_x^2 + a_y^2 + a_z^2}$
+      is aggregated per second into \textbf{mean}, \textbf{std}, and \textbf{max}
+      (\code{ACC\_mag\_mean/std/max}) --- capturing both average intensity and
+      burstiness within the second.
+\item \textbf{EDA (4\,Hz)}: low-pass smoothed, then per-second mean.
+\item \textbf{TEMP (4\,Hz)}: per-second mean (slow, clean signal).
+\item \textbf{BVP (64\,Hz)}: band-pass cleaned but \emph{kept at native rate}, so
+      peak detection has full temporal resolution.
+\item \textbf{IBI (irregular)}: implausible beats dropped, kept on its native
+      irregular index for beat-level HRV.
+\end{itemize}
+
+The four grid-aligned columns (HR, EDA, TEMP, ACC aggregates) are concatenated,
+sorted, and passed through short-gap interpolation. The function returns a dict
+with \code{grid}, native-rate \code{bvp\_clean}, irregular \code{ibi\_clean}, and
+the \code{tags} index.
+
+%=======================================================================
+\section{Signal Cleaning and Filtering}\label{sec:clean}
+%=======================================================================
+
+Cleaning is signal-specific (\code{src/data/cleaning.py}). All frequency-domain
+filters are zero-phase Butterworth filters applied with
+\code{scipy.signal.filtfilt} (forward-backward), which doubles the effective
+order and, crucially, introduces \emph{no phase delay} --- essential when the
+timing of pulse peaks and HR changes carries physiological meaning.
+
+\subsection{Band-pass (BVP / PPG)}
+BVP is band-pass filtered to $[0.5, 8]\,$Hz (order 3) to remove baseline drift
+below the pulse band and high-frequency noise above it. With Nyquist
+$f_{\text{nyq}} = f_s/2$, the normalized cutoffs are
+\[
+W_{\text{low}} = \max\!\left(\frac{0.5}{f_{\text{nyq}}},\,10^{-4}\right),\qquad
+W_{\text{high}} = \min\!\left(\frac{8}{f_{\text{nyq}}},\,0.999\right),
+\]
+and the biquad coefficients come from \code{butter(3, [W_low, W_high], "band")}.
+
+\subsection{Low-pass (EDA / TEMP)}
+EDA is low-pass filtered at 1\,Hz (order 3) before being split into tonic and
+phasic components (Section~\ref{sec:features}). The normalized cutoff is
+$W_c = \min(f_c/f_{\text{nyq}}, 0.999)$.
+
+\subsection{Gravity removal (ACC)}
+Each accelerometer axis is high-pass filtered at 0.5\,Hz to strip the DC gravity
+component, leaving only \emph{dynamic} acceleration (movement) before the
+magnitude is computed. This prevents posture (a static tilt) from registering as
+activity.
+
+\subsection{Range clipping and plausibility}
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+\item HR is clipped to $[30, 220]$\,bpm.
+\item IBI is filtered to $[0.3, 2.0]\,$s (i.e.\ $30$--$200$\,bpm); values outside
+      this are physiologically impossible and are dropped
+      (\code{clean\_ibi}).
+\end{itemize}
+
+\subsection{Gap handling and segmentation}
+\code{fill\_small\_gaps} linearly interpolates gaps up to
+\code{max\_interpolate\_gap\_s} (5\,s). Each interpolated sample is tagged with a
+\code{<col>\_stale} flag ($=1$ when the value was filled across a $>1$-sample
+gap), so the model and the signal-quality layer can down-weight it. Gaps longer
+than \code{max\_segment\_gap\_s} (60\,s) are treated as true discontinuities:
+\code{segment\_by\_gaps} splits the recording into contiguous segments, and
+sequence windows are never built across a segment boundary. This means a
+$\sim$1-hour session broken by charging/removal yields several clean segments
+rather than one corrupted one.
+
+%=======================================================================
+\section{Feature Engineering}\label{sec:features}
+%=======================================================================
+
+\code{src/features/build\_features.py::build\_feature\_table} orchestrates all
+feature modules into one per-second table indexed by the 1\,Hz grid. Modules are
+included conditionally on sensor availability, so a dataset lacking (say) EDA
+simply omits EDA features. The assembly order matters because later modules
+consume earlier ones:
+
+\begin{enumerate}[leftmargin=1.4em,itemsep=1pt]
+\item Base grid $+$ HR features $+$ IBI/HRV features $+$ time features (always).
+\item ACC, BVP, TEMP, EDA features (if present).
+\item Circadian baseline (needs HR).
+\item Physiological state classifier (needs activity $+$ HR $+$ circadian).
+\item Recovery features (need state).
+\item Subject-relative baselines and long-context summaries.
+\item Activity-gating features.
+\item Forecast targets (future HR/RMSSD by shifting).
+\end{enumerate}
+
+\subsection{HR features (\texttt{hr\_features.py})}
+For each window $w \in \{30, 60, 300\}$\,s over the HR series $h(t)$:
+\[
+\mu^{\text{HR}}_w(t)=\frac{1}{w}\!\!\sum_{\tau=t-w+1}^{t}\!\! h(\tau),\quad
+\sigma^{\text{HR}}_w(t)=\sqrt{\tfrac{1}{w-1}\!\!\sum_{\tau=t-w+1}^{t}\!\!\big(h(\tau)-\mu^{\text{HR}}_w(t)\big)^2}.
+\]
+A trailing-window \textbf{trend} is the least-squares slope of $h$ over $w$
+seconds; with $x=0,\dots,w-1$ and $\bar x$ its mean,
+\[
+\text{slope}_w(t)=\frac{\sum_x (x-\bar x)\big(h-\bar h\big)}{\sum_x (x-\bar x)^2}
+\quad[\text{bpm/s}].
+\]
+Rate-of-change features $\text{HR\_roc}_\Delta(t)=h(t)-h(t-\Delta)$ are computed
+for $\Delta \in \{5, 30, 60\}$\,s.
+
+\subsection{IBI / HRV features (\texttt{ibi\_features.py})}
+Wrist-PPG HRV is noisy, so beats are cleaned \emph{before} HRV is computed. A
+\textbf{Hampel filter} rejects ectopic/artifact beats: with local median $m_i$
+over a 5-beat centered window and median absolute deviation $\text{MAD}_i$, a
+beat is flagged when
+\[
+\lvert b_i - m_i\rvert > n_\sigma \cdot 1.4826\cdot \text{MAD}_i,\qquad n_\sigma=3,
+\]
+where $1.4826$ makes the MAD a consistent estimator of the standard deviation
+for Gaussian data. Flagged beats are replaced by the local median, and any
+successive difference that spans a rejected beat is invalidated. Over each HRV
+window $w\in\{60,300\}$\,s (requiring $\geq$\code{hrv\_min\_beats} valid beats):
+
+\begin{align*}
+\text{RMSSD}_w &= \sqrt{\tfrac{1}{M-1}\textstyle\sum_i \big(b_{i+1}-b_i\big)^2}
+   &&\text{(short-term parasympathetic HRV)}\\
+\text{SDNN}_w &= \operatorname{std}\big(\{b_i\}\big)
+   &&\text{(overall HRV)}\\
+\text{pNN50}_w &= \frac{1}{M}\sum_i \mathbb{1}\big[\lvert b_{i+1}-b_i\rvert > 50\text{ms}\big]
+   &&\text{(fraction of large beat-to-beat jumps)}\\
+\text{HR}^{\text{IBI}}_w &= \frac{60}{\overline{b}}
+   &&\text{(HR implied by mean IBI)}
+\end{align*}
+Each beat-indexed metric is forward-filled onto the 1\,Hz grid. A quality column
+\code{RMSSD\_valid\_fraction\_{w}s} (the rolling fraction of non-rejected beats)
+is emitted for the signal-quality layer.
+
+\subsection{Accelerometer features (\texttt{acc\_features.py})}
+From \code{ACC\_mag\_mean} (gravity-removed magnitude in $g$), rolling intensity
+and its std are computed over $w\in\{10,60\}$\,s. The primary intensity is
+bucketed into an ordinal \textbf{activity level} using the thresholds
+$\{0.05, 0.2, 0.5\}\,g$:
+\[
+\text{bucket} \in \{\text{REST}, \text{LIGHT}, \text{MODERATE}, \text{VIGOROUS}\},
+\]
+plus a binary \code{movement\_flag} $=\mathbb{1}[\text{intensity}>0.05\,g]$.
+
+\subsection{BVP / pulse features (\texttt{bvp\_features.py})}
+On the native-rate cleaned BVP, systolic peaks are found with
+\code{scipy.signal.find\_peaks}, enforcing a minimum inter-peak distance of
+$\lfloor f_s\cdot 60/220\rfloor$ samples (a 220\,bpm ceiling). Peak
+\emph{prominences} give a pulse-amplitude series. Per second, the pulse count is
+resampled and a rolling 60\,s sum yields \code{BVP\_pulse\_rate\_1min}; rolling
+30\,s mean/std of amplitude give \code{BVP\_amplitude\_mean/std\_30s}.
+
+\subsection{EDA features (\texttt{eda\_features.py})}
+The tonic (slow) level is a 60\,s rolling mean; the phasic (fast, SCR) component
+is the residual:
+\[
+\text{EDA}_{\text{tonic}}(t)=\tfrac{1}{60}\!\!\sum_{\tau=t-59}^{t}\!\!\text{EDA}(\tau),
+\quad
+\text{EDA}_{\text{phasic}}(t)=\text{EDA}(t)-\text{EDA}_{\text{tonic}}(t),
+\]
+with a rolling mean of $\lvert\text{phasic}\rvert$ as a 60\,s arousal proxy.
+
+\subsection{Temperature features (\texttt{temp\_features.py})}
+A 300\,s rolling mean and slope capture drift; deviation from a personal baseline
+uses an \emph{expanding} mean (a proxy for the calibration-period baseline):
+\[
+\text{TEMP\_baseline\_deviation}(t)=\text{TEMP}(t)-\frac{1}{t}\sum_{\tau\le t}\text{TEMP}(\tau).
+\]
+
+\subsection{Time and circadian features (\texttt{time\_features.py}, \texttt{circadian.py})}
+Time-of-day and day-of-week are encoded cyclically so midnight is adjacent to
+23:59:
+\[
+\Big(\sin\tfrac{2\pi H}{24},\cos\tfrac{2\pi H}{24}\Big),\quad
+\Big(\sin\tfrac{2\pi D}{7},\cos\tfrac{2\pi D}{7}\Big),
+\]
+where $H$ is fractional hour and $D$ day-of-week. The \textbf{causal circadian
+baseline} answers ``what is normal HR for this person at this hour?'' For each
+hour bucket $h\in\{0,\dots,23\}$ it maintains an expanding mean/std of HR,
+\emph{shifted by one step} so the current sample never sees itself:
+\[
+z^{\text{circ}}(t)=\frac{\text{HR}(t)-\mu^{\text{circ}}_{h(t)}(t^-)}
+{\max\!\big(\sigma^{\text{circ}}_{h(t)}(t^-),\,10^{-6}\big)}.
+\]
+On a short single session these are degenerate (one hour bucket), but the same
+code scales directly to weeks of continuous data where each bucket accumulates
+many prior days.
+
+\subsection{Physiological state classifier (\texttt{state\_classifier.py})}
+Each 1\,Hz sample is labeled with one of
+\emph{sleep, rest, focused\_work, walking, exercise, recovery, unknown}. This
+gives the anomaly layer context: an HR spike during \emph{exercise} is expected;
+the same spike during \emph{sleep} is not. The decision cascade (all causal):
+\begin{enumerate}[leftmargin=1.4em,itemsep=1pt]
+\item activity $\geq$ MODERATE $\Rightarrow$ \textbf{exercise}.
+\item recent exercise (600\,s lookback) and HR still $>$ circadian mean $+3$
+      $\Rightarrow$ \textbf{recovery}.
+\item activity $=$ LIGHT $\Rightarrow$ \textbf{walking}.
+\item activity $=$ REST, night hours (23:00--05:59), HR $\le$ circadian mean
+      $\Rightarrow$ \textbf{sleep}.
+\item activity $=$ REST, daytime, elevated EDA arousal $\Rightarrow$
+      \textbf{focused\_work}.
+\item activity $=$ REST otherwise $\Rightarrow$ \textbf{rest}.
+\end{enumerate}
+Missing inputs degrade gracefully to \emph{unknown}.
+
+\subsection{Recovery / fitness features (\texttt{recovery\_features.py})}
+During and after an exercise bout the module tracks the bout's peak HR and how
+fast HR falls from it. Heart-rate recovery is a well-known fitness marker:
+\[
+\text{HRR}(t)=\max(0,\ \text{HR}_{\text{peak}}-\text{HR}(t)),\qquad
+\text{HRR rate}(t)=\frac{\text{HRR}(t)}{\Delta t_{\text{since peak}}/60}\ [\text{bpm/min}].
+\]
+A faster drop indicates better cardiovascular fitness; persistently slow
+recovery over weeks flags declining fitness or incomplete recovery. All outputs
+default to 0 outside a bout, so no NaNs are introduced.
+
+\subsection{Subject-relative baselines and long context (\texttt{subject\_baseline.py})}
+Absolute HR/TEMP/RMSSD vary enormously between people, so deviation from a
+person's \emph{own} recent baseline is more informative than the raw value. For
+each signal $s$ and baseline window $W=3600$\,s (causal):
+\[
+s_{\text{minus\_baseline}}(t)=s(t)-\mu^s_W(t),\qquad
+s_{\text{z\_rolling}}(t)=\frac{s(t)-\mu^s_W(t)}{\sigma^s_W(t)}.
+\]
+Multi-scale long-context summaries of HR and RMSSD over $W\in\{900,1800,3600\}$\,s
+(15/30/60\,min) provide \code{ctx\_mean}, \code{ctx\_std}, and an endpoint slope
+$\big(s(t)-s(t-W)\big)/W$, giving the model both the immediate trajectory and the
+slow baseline trend without needing a 60-minute raw input window. All deviation
+columns default to 0 (never NaN) so windowing never drops rows.
+
+\subsection{Activity-gating features (\texttt{activity\_gating.py})}
+``High HR'' means different things at different motion levels: HR-high $+$
+ACC-high is likely exercise; HR-high $+$ ACC-low is more suspicious (stress,
+illness, arousal). For each activity bucket, a strictly-causal running mean/variance
+of HR is maintained with \textbf{Welford's algorithm}:
+\[
+\mu_k=\mu_{k-1}+\frac{x_k-\mu_{k-1}}{k},\qquad
+M_{2,k}=M_{2,k-1}+(x_k-\mu_{k-1})(x_k-\mu_k),\qquad
+\sigma_k^2=\frac{M_{2,k}}{k}.
+\]
+This yields \code{hr\_expected\_for\_activity}, the residual, a clipped
+\code{hr\_z\_for\_activity} $\in[-8,8]$, and an explicit
+\code{hr\_high\_while\_still} flag (low motion but elevated HR-for-activity).
+NaN HR (sensor gaps) never enters the running stats, so a gap cannot poison the
+baseline.
+
+\subsection{Feature selection and forecast targets}
+\code{numeric\_feature\_columns} selects the model inputs: it keeps every numeric
+column and drops (i) target columns (any \code{*\_target\_*}) and (ii) the
+categorical name columns (\code{activity\_bucket\_name},
+\code{physio\_state\_name}). Forecast \textbf{targets} are built by shifting HR
+(and, when \code{predict\_rmssd} is on, RMSSD) backward by each horizon:
+\[
+\text{HR\_target}_h(t)=\text{HR}(t+h),\qquad h\in\{60,300,600\}\text{ s}.
+\]
+Optional targets (config flags) add change-from-now deltas
+($\text{HR}(t+h)-\text{HR}(t)$) and other vitals (TEMP/EDA) for multi-task
+learning.
+
+%=======================================================================
+\section{Windowing and Dataset Construction}\label{sec:windows}
+%=======================================================================
+
+\code{src/models/datasets.py::make\_windows} slides a length-$L$ window
+(\code{input\_seq\_len\_s} $=120$\,s) over the feature table with a stride
+(\code{stride\_s} $=5$\,s), producing
+\[
+X\in\mathbb{R}^{N\times L\times F},\quad
+y\in\mathbb{R}^{N\times H},\quad
+\text{end\_idx}\in\mathbb{Z}^{N},
+\]
+where $F$ is the number of features and $H$ the number of horizons. A window is
+\emph{dropped} if any feature or target within it is NaN --- this is exactly why
+so many features are engineered to default to 0 rather than NaN. The short
+120\,s context is deliberate: it keeps fragmented $\sim$1-hour sessions
+productive while the long-context features (above) carry the slow information a
+longer raw window would otherwise be needed for.
+
+\textbf{Chronological split.} Data is split forward in time (never shuffled
+across time) into train/val/test by \code{val\_fraction} and
+\code{test\_fraction} ($0.15$ each), so evaluation always predicts the future
+from the past.
+
+\textbf{Scaling.} A \code{StandardScaler} is fit on the flattened training
+windows $(N\!\cdot\!L, F)$ and applied to all splits. Targets are
+\emph{also} standardized (\code{fit\_target\_scaler}), because HR (bpm) and RMSSD
+(ms) live on very different scales and mixing them raw destabilizes the
+Gaussian-NLL objective. Predictions are inverse-transformed back to physical
+units for reporting; the predicted std is rescaled by the per-target scale,
+$\sigma_{\text{raw}}=\sigma_{\text{scaled}}\cdot\text{scale}$.
+
+%=======================================================================
+\section{Forecasting Models}\label{sec:models}
+%=======================================================================
+
+All sequence models share a \textbf{heteroscedastic head}: from the
+representation at the most recent timestep they emit both a mean and a positive
+standard deviation per horizon,
+\[
+\hat\mu_h,\ \hat\sigma_h=\text{softplus}(\cdot)+10^{-3},
+\]
+so every forecast comes with its own uncertainty --- the quantity the anomaly
+layer normalizes by.
+
+\subsection{Temporal Convolutional Network (primary)}
+The recommended model is a causal dilated TCN (\code{src/models/tcn.py}). Each
+\code{CausalConvBlock} is a 1-D convolution with left-padding
+$(k-1)\cdot d$ that is trimmed on the right (\emph{causal trim}), a ReLU,
+dropout, and a residual connection:
+\[
+\text{out}=\text{Dropout}\big(\text{ReLU}(\text{CausalConv}_{k,d}(x))\big)+\text{Res}(x).
+\]
+Stacking $\ell=0,\dots,L{-}1$ levels with exponential dilation $d=2^\ell$ gives an
+exponentially growing receptive field
+\[
+\text{RF}=1+\sum_{\ell=0}^{L-1}2(k-1)2^{\ell}.
+\]
+With the tuned config ($k=3$, levels $=4$) the RF is $\approx$61\,s, matched to the
+120\,s window --- an earlier $k=5$, 6-level version had RF~$\approx$505\,s
+$\gg$ window and overfit. Hidden width is 32 (down from 64 to avoid overfitting
+on a few hundred windows/subject).
+
+\subsection{Recurrent baselines (LSTM / GRU)}
+\code{src/models/lstm\_gru.py} provides an LSTM and a GRU sharing the same
+mean$+$std head, reading the sequence and predicting from the last hidden state.
+
+\subsection{Transformer}
+\code{src/models/transformer.py} projects features to $d_{\text{model}}$, adds
+sinusoidal positional encoding, and applies a causal-masked
+\code{TransformerEncoder} so predictions depend only on past/current steps.
+
+\subsection{XGBoost (tabular baseline)}
+\code{src/models/xgb\_model.py} trains one gradient-boosted regressor per target
+on a single feature vector per timestep (the engineered rolling features already
+encode recent history), so it needs no sequence window. Uncertainty is
+approximated by the constant per-target residual std on the validation set.
+
+\subsection{$\beta$-NLL loss and training}
+Models are trained (\code{src/models/train.py}) by minimizing the
+\textbf{$\beta$-NLL} objective (Seitzer et al., 2022):
+\[
+\mathcal{L}=\frac{1}{NH}\sum_{i,h}
+\Big(\underbrace{\tfrac12\log(2\pi\hat\sigma_{ih}^2)+\tfrac{(y_{ih}-\hat\mu_{ih})^2}{2\hat\sigma_{ih}^2}}_{\text{Gaussian NLL}}\Big)\cdot
+\big(\hat\sigma_{ih}^2\big)^{\beta}_{\text{stop-grad}},\qquad \beta=0.5.
+\]
+Plain Gaussian NLL can be minimized by \emph{inflating} the variance (predicting
+the mean with huge $\sigma$), because the $1/\sigma^2$ term suppresses the error
+--- the ``variance collapse'' that makes forecasts flat. Multiplying by
+$\text{stop-grad}(\sigma^2)^\beta$ restores the mean's gradient magnitude;
+$\beta{=}0$ recovers standard NLL, $\beta{=}1$ is MSE on the mean. Optimization
+uses Adam; \textbf{model selection is by validation MSE of the mean}, not NLL, so
+a variance-collapsed model can never appear ``best.'' Forecast quality is
+reported per horizon as MAE, RMSE, and MAPE.
+
+%=======================================================================
+\section{Personalization}\label{sec:personal}
+%=======================================================================
+
+The system learns \emph{per person} through a staged transfer path
+(\code{src/pipeline/}).
+
+\begin{longtable}{@{}p{0.26\textwidth}p{0.68\textwidth}@{}}
+\toprule
+\textbf{Stage} & \textbf{What it does} \\
+\midrule
+\endhead
+Global pretraining (\code{pretrain\_pipeline.py}) & Pools windows from many
+subjects, intersects their feature columns, trains one population model. Serves
+every new user until they have enough personal data. \\
+SSL warm-start (\code{ssl\_pretrain\_pipeline.py}) & Self-supervised masked
+reconstruction: randomly mask $25\%$ of feature values and train a TCN backbone
+to reconstruct them (no labels). The learned backbone warm-starts a forecaster,
+helping subjects with little data. \\
+Per-user fine-tune (\code{finetune\_pipeline.py}) & Continues training the
+pretrained model on one subject's windows (optionally freezing the backbone),
+in the pretrained target-scaler space. Saved as a normal loadable checkpoint. \\
+Online update (\code{online\_update\_pipeline.py}) & Periodically (e.g.\ nightly)
+continues training on the \emph{most recent} windows only, at a small LR for a
+few epochs, and \code{partial\_fit}s the feature scaler --- so the model tracks
+slow shifts (e.g.\ improving fitness lowering resting HR over months). \\
+Multi-dataset harness (\code{multi\_dataset\_pipeline.py}) & Leave-one-dataset-out
+and repeated-split evaluation across pooled datasets. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Personal Digital Twin (\texttt{personalization/digital\_twin.py})}
+The twin is a compact JSON profile of a person's own physiology: resting, sleep,
+walking, and running HR (means per physiological state), average RMSSD, and a
+per-hour-of-day circadian HR table. The \textbf{health-drift score} compares the
+live HR to this personal expectation:
+\[
+\text{DigitalTwinScore}(t)=\frac{\text{HR}(t)-\text{ExpectedHR}(t)}{\text{ExpectedStd}(t)},
+\]
+where $\text{ExpectedHR}(t)$ is read from the circadian table for the current
+hour, falling back to the state-specific baseline (sleep/rest/walk/run) when no
+circadian estimate exists yet. This personal baseline --- not a population norm
+--- is the reference for drift.
+
+\subsection{Kalman baseline tracker (\texttt{models/kalman.py})}
+A 1-D constant-velocity Kalman filter tracks a slowly-varying scalar (resting HR,
+or the forecast residual) with state $[\text{level},\text{trend}]$:
+\[
+x_k=Fx_{k-1}+w,\ w\sim\mathcal N(0,Q);\qquad z_k=Hx_k+v,\ v\sim\mathcal N(0,R).
+\]
+The normalized innovation $\tilde y_k=(z_k-H\hat x_{k}^-)/\sqrt{S_k}$ is used by
+the anomaly layer to catch gradual drift.
+
+%=======================================================================
+\section{Anomaly Detection}\label{sec:anomaly}
+%=======================================================================
+
+The anomaly layer (\code{src/anomaly/}) is deliberately \emph{separate} from the
+forecaster: it consumes the model's per-timestep outputs
+$(y_t, \hat\mu_t, \hat\sigma_t)$ and turns them into an interpretable score and
+alerts, saving every intermediate quantity for debugging.
+
+\subsection{Uncertainty-normalized residuals}
+The core signal is the residual normalized by the model's own predicted
+uncertainty (\code{detector.py}):
+\[
+z_h(t)=\frac{\lvert y_h(t)-\hat\mu_h(t)\rvert}{\hat\sigma_h(t)+\varepsilon},
+\quad \text{clipped to }[0,8].
+\]
+Clipping prevents a single artifact from exploding the score. Per-target
+$z$-scores are blended with separate HR/RMSSD weights and a mild shorter-horizon
+emphasis.
+
+\subsection{Adaptive (EWMA) baselines with warm-up (\texttt{adaptive.py})}
+``Normal'' is contextual and drifts, so residual statistics are tracked with an
+exponentially-weighted mean/variance, optionally \emph{per activity bucket}:
+\[
+\mu \leftarrow \mu + \lambda(x-\mu),\qquad
+\sigma^2 \leftarrow (1-\lambda)\big(\sigma^2+\lambda(x-\mu)^2\big),\qquad \lambda=0.02.
+\]
+Variance is initialized large ($\sigma\!\approx\!10$\,bpm) and $z$-scores are
+suppressed to 0 for the first 50 observations per key, killing cold-start false
+alarms.
+
+\subsection{Multi-channel evidence}
+The scorer (\code{scoring.py}) combines complementary detectors, each catching a
+different failure mode:
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+\item \textbf{Forecast $z$-scores} --- point deviations from the personal
+      forecast, per horizon.
+\item \textbf{Prediction-interval score} $\lvert y-\hat\mu\rvert/\hat\sigma$ and
+      $\pm1.96\hat\sigma$ out-of-interval flags.
+\item \textbf{RMSSD drop} --- a one-sided $z$-score and fractional drop of HRV
+      below its EWMA baseline (HRV collapse).
+\item \textbf{Kalman innovation} --- normalized innovation of the 1-min residual
+      stream (slow drift).
+\item \textbf{CUSUM drift} --- a two-sided decaying CUSUM on residuals that
+      accumulates sustained directional bias per-step $z$-scores normalize away:
+      \[
+      s^+_i=\max\!\big(0,\ \text{decay}\cdot s^+_{i-1}+z_i-k\big),\quad
+      s^-_i=\max\!\big(0,\ \text{decay}\cdot s^-_{i-1}-z_i-k\big),
+      \]
+      with slack $k=0.7$ and $\text{decay}=0.998$ ($\approx$6-min half-life), so
+      exercise bursts do not bleed into later rest.
+\item \textbf{Circadian $z$} and \textbf{digital-twin $z$} --- deviation from the
+      person's time-of-day and state baselines.
+\end{itemize}
+
+\subsection{Illness composite (\texttt{explain.py})}
+Three signals classically co-move during infection/fever; individually each may
+be noise, together they are strong evidence:
+\[
+\text{illness}=\frac13\!\left(
+\frac{[z^{\text{HR}}]_+}{3}
++\frac{[\text{RMSSD}_{\%\text{drop}}]_+}{0.35}
++\frac{[\Delta\text{TEMP}]_+}{1.0}\right),
+\]
+scaled so a ``typical fever'' (HR $z\!\approx\!3$, RMSSD drop $\approx$35\%, TEMP
+$+1^\circ$C) scores $\approx 1.0$.
+
+\subsection{Combined score, exercise suppression, illness boost}
+\[
+\text{score}(t)=\max_{\text{channels}}\Big(w_{\text{sup}}(t)\cdot\text{channel}\Big)
++1.5\cdot[\text{illness}(t)]_+ .
+\]
+During \emph{exercise/recovery} the HR-based channels (forecast, circadian,
+digital-twin, Kalman, CUSUM) are down-weighted by $80\%$
+($w_{\text{sup}}=0.2$) because elevated HR is expected; RMSSD and illness terms
+are \emph{not} suppressed. The base score is a $\max$ over channels so one strong
+signal fires immediately, while the additive illness term lets several
+individually-mild channels jointly cross the threshold.
+
+\subsection{Signal-quality gating (\texttt{signal\_quality.py})}
+Real wrist data is full of motion/contact artifacts; without a quality gate,
+sensor noise is mistaken for a health event. A per-second Signal-Quality Index
+$\in[0,1]$ is computed per modality (implausible jumps, out-of-range values,
+stale/interpolated flags, HRV valid-fraction, ACC saturation, BVP flatline). The
+overall SQI is the \emph{weakest} modality (a single bad sensor spoils the
+window), and the effective anomaly score is
+\[
+\text{score}_{\text{eff}}(t)=\text{score}(t)\cdot \text{SQI}_{\text{overall}}(t),
+\]
+so unreliable windows are labeled ``sensor issue,'' not ``anomaly.''
+
+\subsection{Hysteresis alerting and threshold calibration (\texttt{detector.py})}
+Alerts use a start/stop hysteresis state machine to avoid chatter:
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+\item An alert \textbf{starts} only after $\text{score}_{\text{eff}}\ge
+      \theta_{\text{start}}$ for \code{min\_duration\_s} continuous seconds
+      (the build-up is backfilled).
+\item It \textbf{stays} until the score drops below
+      $\theta_{\text{stop}}=0.6\,\theta_{\text{start}}$.
+\item After it ends, a \code{cooldown\_s} quiet period applies, bypassed only for
+      genuine emergencies ($\ge 1.5\,\theta_{\text{start}}$).
+\end{itemize}
+The start threshold is \textbf{calibrated} on the distribution of
+\emph{normal} (non-anomalous) validation scores at a chosen percentile
+($99$th, floored at 3.0), targeting a false-alert budget rather than a
+hand-picked number. \code{alert\_stats} reports the normal alert rate,
+alerts-per-hour, and mean alert duration; \code{severity} maps the continuous
+score to \emph{normal / watch / alert / urgent}. In the served AI path,
+severity is bucketed as \emph{normal} $<1.5\le$ \emph{watch} $<3.0\le$
+\emph{alert}.
+
+\subsection{Explainable reasons}
+Every alert carries a human-readable reason built from the same numbers, e.g.\
+\emph{``+HR 22\,bpm above expected, RMSSD dropped 35\%, Temp elevated
+$+1.2^\circ$C, Activity: rest''}, so a clinician sees \emph{why}, not just a
+score.
+
+%=======================================================================
+\section{Simulation and Evaluation}
+%=======================================================================
+
+\code{src/simulation/} generates synthetic 1\,Hz traces (circadian HR baseline
+$+$ activity-driven response) with injected abnormal windows labeled by an
+\code{anomaly\_label} column, and can concatenate scenarios onto a real subject's
+grid for ``inject-into-real-data'' testing. Evaluation scripts
+(\code{scripts/run\_*.py}) cover preprocessing, training, inference, ablation,
+error analysis, online update, and simulation scoring. Forecast metrics are
+per-horizon MAE/RMSE/MAPE; calibration (\code{evaluation/calibration.py})
+checks that predicted uncertainty matches observed error; the anomaly harness
+reports detection rate and false-alarms-per-hour.
+
+%=======================================================================
+\section{AI Serving Layer}\label{sec:aiservice}
+%=======================================================================
+
+The \code{ai/} FastAPI service exposes the research pipeline over HTTP with a
+stable contract and a never-fail fallback.
+
+\subsection{Model resolution (\texttt{hrv\_forecast/model\_loader.py})}
+\code{HRV\_MODEL\_DIR} is treated as a \emph{base} directory. Per request, a
+checkpoint is resolved in priority order: the subject's personal directory
+$\rightarrow$ \code{global/} $\rightarrow$ the base directory as a flat
+checkpoint. Each resolved directory is loaded once and cached, so many subjects
+sharing the global model pay the load cost only once. Any load error is logged
+and the service falls back to the mock engine rather than crashing.
+
+\subsection{Feature adapter (\texttt{hrv\_forecast/feature\_adapter.py})}
+The adapter turns an API list of \code{HRVSample}s into the exact feature table
+the research pipeline expects --- without raw E4 files --- by building the
+``synced'' shape (grid, cleaned IBI) directly and calling the real
+\code{build\_feature\_table}. The HR grid is built by resampling first and then
+reindexing onto the 1\,Hz bins (a fix ensuring sub-second-timestamp inputs no
+longer produce an all-NaN HR column).
+
+\subsection{Real vs.\ mock engines and graceful fallback}
+\code{real\_engine.py} runs the true pipeline: anomaly scoring and the digital
+twin need only feature engineering (no trained net) and run for real today;
+forecasting needs a trained checkpoint and raises if none is loaded.
+\code{service.py} wraps each call so that if the real path raises for any reason
+(too few samples, a bad checkpoint, an unexpected shape), it logs and returns the
+deterministic mock engine's response --- callers always learn which they got via
+\code{model\_status}. Endpoints (\code{routes/hrv.py}):
+\code{GET /hrv/status}, \code{POST /hrv/forecast}, \code{POST /hrv/anomaly},
+\code{POST /hrv/digital-twin}; plus \code{/health} and the agentic \code{/chat}.
+
+\subsection{Agentic analysis workflow (\texttt{ai/workflow.py})}
+A LangGraph state machine chains five nodes:
+\[
+\text{planner}\to\text{signal}\to\text{medical}\to\text{trend}\to\text{report}\to\text{END}.
+\]
+\emph{Planner} classifies intent (stress/sleep/hrv/trend/general) by keyword;
+\emph{signal} runs the PPG analysis pipeline; \emph{medical} composes only
+data-grounded reasoning (never invented numbers); \emph{trend} computes a real
+first-half-vs-second-half comparison; \emph{report} calls the LLM
+(\code{langchain-xai}, Grok) with a strict ``use only measured data'' system
+prompt and falls back to a deterministic template if the LLM is unavailable.
+
+\subsection{Standalone PPG analysis (\texttt{ai/analysis/})}
+\code{HealthPipeline} preprocesses PPG (band-pass $0.5$--$8$\,Hz, normalize,
+Savitzky--Golay smooth), detects peaks (\code{find\_peaks}, min distance
+$0.45\,$s), forms RR intervals, and computes HRV time-domain metrics
+(RMSSD, SDNN, mean RR, mean HR, pNN50) and a heuristic stress score
+$\text{clip}\big([60-\text{RMSSD}]_+ + [\text{HR}-70]_+,\,0,100\big)$ mapped to
+Low/Moderate/High. Numeric results are cast to native Python floats so NumPy
+scalar reprs never leak into reports.
+
+%=======================================================================
+\section{Backend Platform (Django REST)}
+%=======================================================================
+
+The \code{backend/} app (\code{login/}) is API-only (DRF, JWT via SimpleJWT),
+grouped under \code{/api/} in \code{mHealth/urls.py}.
+
+\subsection{Authentication}
+Email-OTP signup and login with JWT access/refresh tokens:
+\code{/api/auth/signup}, \code{send-otp}, \code{verify-otp}, \code{login},
+\code{login/verify}, \code{logout}, \code{change-password}, \code{me},
+\code{token/refresh}. \code{DJANGO\_SECRET\_KEY} is environment-only and startup
+fails loudly in production if unset; \code{DEBUG} defaults to \emph{False}
+(fail-closed). Settings now load \code{backend/.env} explicitly via
+\code{load\_dotenv} so hand-launched servers honor it.
+
+\subsection{Data model (\texttt{login/models.py})}
+\begin{longtable}{@{}p{0.28\textwidth}p{0.66\textwidth}@{}}
+\toprule
+\textbf{Model} & \textbf{Purpose} \\
+\midrule
+\endhead
+\code{UserProfile} & Extended per-user profile. \\
+\code{EmailOTP} & One-time passcodes for signup/login. \\
+\code{Device} & Registered ingestion device (key, battery, firmware, session). \\
+\code{GoogleSheet}, \code{ExcelFile} & External/tabular data sources. \\
+\code{UploadedDocument} & Category metadata (lab/prescription/imaging/\ldots) for
+files on disk. \\
+\code{HRVAnomalyAlert} & A fired anomaly/digital-twin deviation from
+\code{/hrv/anomaly} (score, reasons, severity, emailed flag). \\
+\code{AlertRule}, \code{AlertFired} & Per-user threshold rules and their firings. \\
+\code{SessionAnnotation} & Timestamped notes on a session. \\
+\code{ContactMessage}, \code{ParticipantConsent} & Contact form, health consent. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Signal Portal and HRV in the backend}
+The portal (\code{/api/device/sessions/*}) aggregates E4 session folders:
+per-minute/hour/day stats for HR/EDA/TEMP, ACC movement magnitude, a BVP
+waveform sample, and HRV from IBI. Backend HRV mirrors the research formulas:
+$\text{RMSSD}=\sqrt{\overline{(\Delta b)^2}}$ and $\text{SDNN}=\operatorname{std}(b)$
+(\code{views/device.py::\_hrv\_stats}). \code{session\_trends} and
+\code{compare\_sessions} power the trends/compare pages.
+
+\subsection{HL7 export and alerts}
+\code{/api/hl7/*} converts session CSVs into HL7 messages (text and PDF via
+ReportLab). \code{/api/alerts/*} manages threshold rules, evaluates them when
+a session loads, records firings, and ingests HRV anomalies from the AI service
+(\code{report\_hrv\_anomaly}), emailing the user on \emph{alert} severity.
+
+%=======================================================================
+\section{Frontend and Device Ingestion}\label{sec:frontend}
+%=======================================================================
+
+\subsection{Next.js web app}
+The App-Router frontend (\code{frontend/src/app/}) provides pages for
+\emph{login, dashboard, files, PPG visualization, portal
+(+session/trends/compare), alerts, devices, consent}, and \emph{admin}
+(overview, patients). \code{src/lib/api.ts} is an Axios client with a 15\,s
+timeout that attaches the JWT and transparently refreshes on 401.
+\code{HRVInsights.tsx} calls the AI service directly (with an 8\,s timeout) to
+render forecasts, the digital twin, and anomaly badges alongside the recharts
+time series. Styling uses the emerald ``CareVibe'' theme.
+
+\subsection{Device heartbeat}
+\code{device-ingestion/heartbeat.py} posts \code{battery/firmware/session} to
+\code{/api/devices/heartbeat/} with an \code{X-Device-Key} header, so the portal
+can show a device as online with live status. The key is issued once in the
+portal's ``Register device'' flow.
+
+%=======================================================================
+\section{Configuration Reference}
+%=======================================================================
+
+Key parameters (\code{configs/config.yaml}); the AI feature adapter mirrors the
+relevant subset as a literal dict so \code{ai/} needs no YAML dependency.
+
+\begin{longtable}{@{}p{0.32\textwidth}p{0.20\textwidth}p{0.40\textwidth}@{}}
+\toprule
+\textbf{Parameter} & \textbf{Value} & \textbf{Meaning} \\
+\midrule
+\endhead
+\code{resample.freq} & \code{1s} & common grid frequency \\
+\code{hr\_min/max\_bpm} & 30 / 220 & HR clip range \\
+\code{ibi\_min/max\_s} & 0.3 / 2.0 & plausible IBI range \\
+\code{bvp\_bandpass\_hz} & [0.5, 8.0] & BVP band-pass \\
+\code{eda\_lowpass\_hz} & 1.0 & EDA low-pass \\
+\code{max\_interpolate\_gap\_s} & 5 & max gap to interpolate \\
+\code{max\_segment\_gap\_s} & 60 & gap that splits a recording \\
+\code{hr\_windows\_s} & 30/60/300 & HR rolling windows \\
+\code{hrv\_windows\_s} & 60/300 & HRV rolling windows \\
+\code{hrv\_min\_beats} & 3 & min valid beats per HRV window \\
+\code{hrv\_hampel\_window/sigma} & 5 / 3.0 & ectopic-beat rejection \\
+\code{baseline\_windows\_s} & 3600 & personal baseline window \\
+\code{longctx\_windows\_s} & 900/1800/3600 & long-context summaries \\
+\code{input\_seq\_len\_s} & 120 & model input window \\
+\code{horizons\_s} & 60/300/600 & forecast horizons \\
+\code{stride\_s} & 5 & window stride \\
+\code{hidden\_channels} & 32 & model width \\
+\code{tcn\_levels / kernel\_size} & 4 / 3 & TCN depth/kernel (RF $\approx$61\,s) \\
+\code{dropout} & 0.2 & regularization \\
+\code{epochs / lr / batch} & 40 / 1e-3 / 64 & training \\
+\code{nll\_beta} & 0.5 & $\beta$-NLL weight \\
+\code{val/test\_fraction} & 0.15 / 0.15 & chronological split \\
+\code{ewma\_lambda} & 0.02 & residual EWMA rate \\
+\code{z\_thresh} & 3.0 & base alert threshold \\
+\code{start\_percentile} & 99.0 & calibration percentile \\
+\code{stop\_fraction} & 0.6 & hysteresis stop ratio \\
+\code{min\_duration\_s / cooldown\_s} & 20 / 60 & alert persistence/quiet \\
+\bottomrule
+\end{longtable}
+
+%=======================================================================
+\section{Reliability and Hardening Notes}
+%=======================================================================
+
+Several robustness properties are worth calling out because they shape the
+working code throughout:
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+\item \textbf{Never-NaN features.} Deviation/recovery/context features default to
+      0 rather than NaN so \code{make\_windows} does not silently discard rows.
+\item \textbf{Strict causality.} Circadian, activity-gating, and EWMA baselines
+      use expanding means with a one-step shift or online updates, so no feature
+      sees the future.
+\item \textbf{Fail-open service.} The AI HRV endpoints always answer: real
+      pipeline first, deterministic mock on any exception, with the mode exposed
+      via \code{model\_status}.
+\item \textbf{Fail-closed security.} \code{DEBUG} defaults to False and the
+      secret key must be supplied in production or startup aborts.
+\item \textbf{Safe checkpoint loading.} \code{torch.load(..., weights_only=True)} is used when loading model/SSL state to avoid
+      arbitrary-code-execution from pickled checkpoints.
+\end{itemize}
+
+\vfill
+\noindent\rule{\linewidth}{0.4pt}\\[4pt]
+\small This report documents the Care-Sync/M-Health codebase as implemented:
+the data path (ingest $\to$ sync $\to$ clean $\to$ features $\to$ windows),
+the forecasting models and their $\beta$-NLL training, the personalization
+stack and digital twin, the multi-channel explainable anomaly detector, and the
+FastAPI/Django/Next.js platform that serves it.
+\end{document}

@@ -43,7 +43,7 @@ def load_model(out_dir: Path | str):
     else:
         raise ValueError(model_type)
 
-    state = torch.load(out_dir / f"{model_type}_model.pt", map_location="cpu")
+    state = torch.load(out_dir / f"{model_type}_model.pt", map_location="cpu", weights_only=True)
     model.load_state_dict(state)
     model.eval()
     return model, scaler, meta
